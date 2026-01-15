@@ -46,6 +46,7 @@ INITIAL_OPUS_RETRIES=16    # Try Opus first
 ALTERNATE_RETRIES=24       # Then alternate between Sonnet and Opus
 HAIKU_RETRIES=3            # Fail fast - if Haiku is unavailable, API has major issues
 RETRY_DELAY=15             # Fixed 15-second interval
+POORMAN_MODE=false         # Skip retry logic, try sonnet once and accept any model
 
 # Model pricing (per million tokens) - easy to update when prices change
 HAIKU_INPUT_PRICE=0.80
@@ -608,8 +609,25 @@ print_final_summary() {
 # ARGUMENT PARSING & VALIDATION
 # =============================================================================
 
-if [ -z "$1" ] || [ -z "$2" ]; then
-    log_error "Usage: $0 <plan-dir> <iterations>"
+# Parse optional flags
+while [[ "${1:-}" == --* ]]; do
+    case "$1" in
+        --poorman)
+            POORMAN_MODE=true
+            shift
+            ;;
+        *)
+            log_error "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
+if [ -z "${1:-}" ] || [ -z "${2:-}" ]; then
+    log_error "Usage: $0 [--poorman] <plan-dir> <iterations>"
+    echo ""
+    echo "Options:"
+    echo "  --poorman       Skip retry logic, try sonnet once and accept any model"
     echo ""
     echo "Arguments:"
     echo "  plan-dir        Directory containing the plan (must have TODO.md)"
@@ -617,7 +635,7 @@ if [ -z "$1" ] || [ -z "$2" ]; then
     echo ""
     echo "Examples:"
     echo "  $0 plans/arena-v2/ 10              # Run 10 iterations on arena-v2 plan"
-    echo "  $0 plans/ml-dashboard-port-refacor/ 20  # Run 20 iterations on ml-dashboard plan"
+    echo "  $0 --poorman plans/arena-v2/ 10   # Run without retry logic (cheaper)"
     exit 1
 fi
 
@@ -658,6 +676,9 @@ log_info "Iterations: $ITERATIONS"
 log_info "TODO file: $TODO_FILE"
 log_info "Progress file: $PROGRESS_FILE"
 log_info "Metrics file: $METRICS_LOG"
+if [ "$POORMAN_MODE" = true ]; then
+    log_warn "Poorman mode: retry logic disabled, using sonnet"
+fi
 echo ""
 
 # =============================================================================
@@ -714,14 +735,46 @@ for ((i=1; i<=ITERATIONS; i++)); do
     # Format: "- [ ] Task description" -> "Task description"
     CURRENT_TASK=$(grep -m 1 '^\s*- \[ \]' "$TODO_FILE" | sed 's/^\s*- \[ \] //')
 
-    RETRY_COUNT=0
-    OPUS_OBTAINED=false
-    MODEL_OBTAINED=false
     claude_json=""
+    CLAUDE_EXIT_CODE=0
 
-    echo "Trying $REQUESTED_MODEL..."
+    if [ "$POORMAN_MODE" = true ]; then
+        # Poorman mode: try sonnet once, accept any model
+        start_timer
+        claude_json=$(claude --output-format json --model sonnet --permission-mode acceptEdits -p "Find the highest-priority task from the TODO file and work only on that task.
 
-    # Stage 1: Try Opus exclusively first
+Here are the current TODO items and progress:
+
+@$TODO_FILE
+
+@$PROGRESS_FILE
+
+Guidelines:
+1. Pick ONE task from the TODO file that you determine has the highest priority
+2. Work ONLY on that task - do not work on multiple tasks
+3. Update the TODO file by marking the task as complete (change [ ] to [x]) or updating its status
+4. After completing the task, append your progress to the progress file (@$PROGRESS_FILE) with this format:
+   - Current date/time
+   - Task name
+   - What was accomplished
+   - Next steps (if any)
+
+IMPORTANT: Only work on a SINGLE task per iteration.
+
+If, while working on the task, you determine ALL tasks are complete, output exactly this:
+<promise>COMPLETE</promise>" 2>/dev/null) || CLAUDE_EXIT_CODE=$?
+        stop_timer
+        ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | keys[0] // "unknown"')
+        echo "✓ $ACTUAL_MODEL (poorman mode)"
+    else
+        # Normal mode: multi-stage retry logic
+        RETRY_COUNT=0
+        OPUS_OBTAINED=false
+        MODEL_OBTAINED=false
+
+        echo "Trying $REQUESTED_MODEL..."
+
+        # Stage 1: Try Opus exclusively first
     while [ $RETRY_COUNT -lt $INITIAL_OPUS_RETRIES ]; do
         start_timer
         claude_json=$(claude --output-format json --model opus --permission-mode acceptEdits -p "Find the highest-priority task from the TODO file and work only on that task.
@@ -890,6 +943,7 @@ If, while working on the task, you determine ALL tasks are complete, output exac
             exit 1
         fi
     fi
+    fi  # End of poorman mode check
 
     # Extract text content from JSON for completion check and display
     result=$(jq -r '.result // ""' <<< "$claude_json")

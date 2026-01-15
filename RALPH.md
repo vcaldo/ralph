@@ -20,8 +20,11 @@ tail -f progress.txt
 
 ### Basic Command
 ```bash
-./ralph.sh <plan-dir> <iterations>
+./ralph.sh [--poorman] <plan-dir> <iterations>
 ```
+
+### Options
+- **--poorman**: Skip retry logic, try sonnet once and accept any model (cheaper, faster)
 
 ### Arguments
 - **plan-dir** (required): Directory containing the plan (must have `TODO.md`)
@@ -46,6 +49,11 @@ The script will look for `TODO.md` in the plan directory and create:
 **Run 5 iterations on any plan directory**
 ```bash
 ./ralph.sh plans/my-custom-plan/ 5
+```
+
+**Run in poorman mode (cheaper, no retries)**
+```bash
+./ralph.sh --poorman plans/arena-v2/ 10
 ```
 
 **Run via make (if target added)**
@@ -293,6 +301,8 @@ Iteration N
 ```
 
 **Phase 2: Model Acquisition**
+
+In normal mode:
 ```
 Trying opus...
 ```
@@ -301,8 +311,14 @@ Then one of:
 - `✗ got [model], retrying (N/M)...` - Wrong model, will retry
 - `✗ opus unavailable, trying alternating strategy...` - Moving to Stage 2
 
+In poorman mode (--poorman):
+- `✓ [model] (poorman mode)` - Accepts any model returned
+
 **Phase 3: Model Fallback (if needed)**
-Stage 2 alternates between Sonnet and Opus:
+
+Skipped in poorman mode.
+
+In normal mode, Stage 2 alternates between Sonnet and Opus:
 - `✓ opus` - Got Opus on retry
 - `✓ sonnet (fallback)` - Accepted Sonnet as fallback
 - `✗ got [model], retrying (N/M)...` - Still retrying
@@ -588,6 +604,7 @@ git status  # ralph_metrics.jsonl should not appear
 - Group related work in single tasks
 - Monitor first run to check quality
 - Increase iterations once you see good results
+- Use `--poorman` for cheaper runs when model choice isn't critical
 
 ## Graceful Interrupt Handling
 
