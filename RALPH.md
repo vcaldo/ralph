@@ -242,6 +242,119 @@ tail -20 progress.txt
 git log --oneline -10
 ```
 
+### Auto-Commit Format
+
+Ralph automatically commits changes after each iteration if files were modified. Commits follow this format:
+
+```
+ralph: <task description>
+```
+
+**Examples:**
+```bash
+# If the task was "Add check_dependencies() function to ralph.sh"
+git log --oneline -1
+# Output: abc1234 ralph: Add check_dependencies() function to ralph.sh
+
+# If the task was "Implement Stage 1 retry loop"
+git log --oneline -1
+# Output: def5678 ralph: Implement Stage 1 retry loop
+```
+
+**How it works:**
+- Ralph extracts the first unchecked task from TODO.md
+- After completing the task, Ralph commits with `ralph: <task>` as the message
+- Commits use your git identity (not Claude's)
+- No commit is made if no files were changed during the iteration
+
+**Check Ralph commits:**
+```bash
+# View all Ralph commits in current branch
+git log --oneline --grep="^ralph:"
+
+# Count Ralph commits
+git log --oneline --grep="^ralph:" | wc -l
+
+# See what files Ralph modified
+git log --grep="^ralph:" --stat
+```
+
+## Iteration Message Flow
+
+Each Ralph iteration follows a canonical message order. Understanding this flow helps when debugging or monitoring Ralph's progress.
+
+### Canonical Message Order
+
+**Phase 1: Iteration Start**
+```
+==================================================
+Iteration N
+==================================================
+```
+
+**Phase 2: Model Acquisition**
+```
+Trying opus...
+```
+Then one of:
+- `✓ opus` - Got requested model
+- `✗ got [model], retrying (N/M)...` - Wrong model, will retry
+- `✗ opus unavailable, trying alternating strategy...` - Moving to Stage 2
+
+**Phase 3: Model Fallback (if needed)**
+Stage 2 alternates between Sonnet and Opus:
+- `✓ opus` - Got Opus on retry
+- `✓ sonnet (fallback)` - Accepted Sonnet as fallback
+- `✗ got [model], retrying (N/M)...` - Still retrying
+- Hard failure exits with error message
+
+**Phase 4: Claude's Work Output**
+```
+[Claude's result text - task completion, explanations, etc.]
+```
+
+**Phase 5: Auto-Commit (if files changed)**
+```
+✓ Committed: ralph: [task description]
+```
+Or if no changes: `ℹ No changes to commit`
+
+**Phase 6: Iteration Metrics**
+```
+--- Iteration Metrics ---
+Duration: Xm XXs
+Model: [model name]
+Status: [stop_reason]
+Input tokens: XXXXX
+Output tokens: XXXXX
+Total tokens: XXXXX
+Cache created: XXXXX tokens
+Cache read: XXXXX tokens (XX% hit rate)
+Files changed: X
+Success: ✓
+```
+
+**Phase 7: Completion Check**
+If `<promise>COMPLETE</promise>` found in output:
+```
+==================================================
+✓ All tasks complete, exiting
+==================================================
+[Final Summary displayed]
+```
+
+### Message Source Reference
+
+| Phase | Source Location | Function/Code |
+|-------|----------------|---------------|
+| Iteration Header | ralph.sh:651-654 | Main loop |
+| Model Acquisition | ralph.sh:674-721 | Stage 1 retry |
+| Model Fallback | ralph.sh:724-790 | Stage 2 retry |
+| Claude Output | ralph.sh:804 | Main loop |
+| Auto-Commit | ralph.sh:799-801 | `commit_changes()` |
+| Iteration Metrics | ralph.sh:808 | `print_metrics_summary()` |
+| Completion | ralph.sh:812-826 | Main loop |
+
 ## Metrics & Performance Tracking
 
 Ralph automatically captures detailed metrics for each interaction, helping you understand execution time, token consumption, and cache performance.

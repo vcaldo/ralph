@@ -41,9 +41,11 @@ CLAUDE_EXIT_CODE=0
 # Model retry configuration
 REQUESTED_MODEL="opus"
 FALLBACK_MODEL="sonnet"
-INITIAL_OPUS_RETRIES=16    # Try Opus first, 8 times
-ALTERNATE_RETRIES=24       # Then alternate between both models
-RETRY_DELAY=15             # Fixed 30-second interval
+LAST_RESORT_MODEL="haiku"
+INITIAL_OPUS_RETRIES=16    # Try Opus first
+ALTERNATE_RETRIES=24       # Then alternate between Sonnet and Opus
+HAIKU_RETRIES=3            # Fail fast - if Haiku is unavailable, API has major issues
+RETRY_DELAY=15             # Fixed 15-second interval
 
 # Model pricing (per million tokens) - easy to update when prices change
 HAIKU_INPUT_PRICE=0.80
@@ -52,6 +54,11 @@ SONNET_INPUT_PRICE=3.00
 SONNET_OUTPUT_PRICE=12.00
 OPUS_INPUT_PRICE=15.00
 OPUS_OUTPUT_PRICE=45.00
+
+# Timer/chronograph configuration
+TIMER_PID=""
+TIMER_START_TIME=0
+SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 
 # =============================================================================
 # FUNCTIONS
@@ -71,6 +78,112 @@ log_info() {
 
 log_warn() {
     echo -e "${YELLOW}⚠${NC}  $1"
+}
+
+# =============================================================================
+# TIMER/CHRONOGRAPH FUNCTIONS
+# =============================================================================
+
+# Start a background timer that displays elapsed time with spinner
+# Call stop_timer() when the timed operation completes
+start_timer() {
+    TIMER_START_TIME=$(date +%s)
+
+    # Start background process that updates display every second
+    (
+        local i=0
+        local spinner_len=${#SPINNER_CHARS}
+        local start_time=$TIMER_START_TIME
+
+        while true; do
+            local now=$(date +%s)
+            local elapsed=$((now - start_time))
+            local mins=$((elapsed / 60))
+            local secs=$((elapsed % 60))
+            local char="${SPINNER_CHARS:$((i % spinner_len)):1}"
+
+            # Use carriage return to overwrite line, ANSI codes for color
+            printf "\r${CYAN}%s${NC} Running... %02d:%02d" "$char" "$mins" "$secs"
+
+            i=$((i + 1))
+            sleep 1
+        done
+    ) &
+    TIMER_PID=$!
+}
+
+# Stop the timer and clean up the display line
+stop_timer() {
+    if [[ -n "$TIMER_PID" ]]; then
+        # Kill the background timer process
+        kill "$TIMER_PID" 2>/dev/null || true
+        wait "$TIMER_PID" 2>/dev/null || true
+        TIMER_PID=""
+    fi
+
+    # Clear the timer line using ANSI escape sequence
+    printf "\r\033[K"
+}
+
+# =============================================================================
+# DEPENDENCY CHECKS
+# =============================================================================
+
+# Check that all required dependencies are available
+# Returns 0 if all dependencies are present, 1 otherwise
+check_dependencies() {
+    local missing_deps=0
+
+    # Check for claude CLI
+    if ! command -v claude &> /dev/null; then
+        log_error "claude CLI not found"
+        echo "  Install: npm install -g @anthropic-ai/claude-code"
+        echo "  Or visit: https://docs.anthropic.com/claude-code"
+        missing_deps=1
+    fi
+
+    # Check for jq
+    if ! command -v jq &> /dev/null; then
+        log_error "jq not found"
+        echo "  Install (Ubuntu/Debian): sudo apt install jq"
+        echo "  Install (macOS): brew install jq"
+        echo "  Install (Fedora): sudo dnf install jq"
+        missing_deps=1
+    fi
+
+    # Check for git
+    if ! command -v git &> /dev/null; then
+        log_error "git not found"
+        echo "  Install (Ubuntu/Debian): sudo apt install git"
+        echo "  Install (macOS): brew install git"
+        echo "  Install (Fedora): sudo dnf install git"
+        missing_deps=1
+    else
+        # Git is available, check for identity configuration
+        local git_user git_email
+        git_user=$(git config user.name 2>/dev/null || echo "")
+        git_email=$(git config user.email 2>/dev/null || echo "")
+
+        if [[ -z "$git_user" ]]; then
+            log_error "Git user.name not configured"
+            echo "  Run: git config --global user.name \"Your Name\""
+            missing_deps=1
+        fi
+
+        if [[ -z "$git_email" ]]; then
+            log_error "Git user.email not configured"
+            echo "  Run: git config --global user.email \"your@email.com\""
+            missing_deps=1
+        fi
+    fi
+
+    if [[ $missing_deps -eq 1 ]]; then
+        echo ""
+        log_error "Missing dependencies - please install the above before running Ralph"
+        return 1
+    fi
+
+    return 0
 }
 
 # =============================================================================
@@ -130,11 +243,42 @@ check_git_state() {
     return 0
 }
 
+# Commit changes made during an iteration
+# Parameters: commit_message - The commit message to use
+# Returns: 0 if commit succeeded or no changes, 1 if commit failed
+commit_changes() {
+    local commit_message="$1"
+
+    # Check if there are any changes to commit
+    if [[ -z "$(git status --porcelain)" ]]; then
+        log_info "No changes to commit"
+        return 0
+    fi
+
+    # Stage all changes
+    if ! git add -A; then
+        log_error "Failed to stage changes"
+        return 1
+    fi
+
+    # Execute commit
+    if git commit -m "$commit_message"; then
+        log_success "Committed: $commit_message"
+        return 0
+    else
+        log_error "Failed to commit changes"
+        return 1
+    fi
+}
+
 # =============================================================================
 # SIGNAL HANDLING (Graceful Interrupt)
 # =============================================================================
 
 on_interrupt() {
+    # Stop timer if running to clean up display
+    stop_timer
+
     echo ""
     echo "=================================================="
     log_warn "Script interrupted by user (Ctrl+C)"
@@ -347,14 +491,7 @@ print_metrics_summary() {
     # Print simple list format (no box borders)
     echo "--- Iteration Metrics ---"
     echo "Duration: $duration_str"
-    # Show model with fallback indicator if applicable
-    if echo "$ITERATION_MODEL" | grep -qi "$REQUESTED_MODEL"; then
-        echo "Model: $ITERATION_MODEL"
-    elif echo "$ITERATION_MODEL" | grep -qi "$FALLBACK_MODEL"; then
-        echo "Model: $ITERATION_MODEL (fallback, requested $REQUESTED_MODEL)"
-    else
-        echo "Model: $ITERATION_MODEL (unexpected, requested $REQUESTED_MODEL, fallback $FALLBACK_MODEL)"
-    fi
+    echo "Model: $ITERATION_MODEL"
     echo "Status: $ITERATION_STOP_REASON"
     echo "Input tokens: $ITERATION_INPUT_TOKENS"
     echo "Output tokens: $ITERATION_OUTPUT_TOKENS"
@@ -527,6 +664,11 @@ echo ""
 # PRE-FLIGHT CHECKS
 # =============================================================================
 
+# Verify required dependencies are available
+if ! check_dependencies; then
+    exit 1
+fi
+
 # Verify git repository state
 if ! check_git_state; then
     exit 1
@@ -568,6 +710,10 @@ for ((i=1; i<=ITERATIONS; i++)); do
     # Separate stdout (JSON) from stderr to avoid corrupting JSON with error messages
     # Two-tier retry strategy: first try Opus, then fall back to Sonnet if needed
 
+    # Extract current task from TODO file (first unchecked item)
+    # Format: "- [ ] Task description" -> "Task description"
+    CURRENT_TASK=$(grep -m 1 '^\s*- \[ \]' "$TODO_FILE" | sed 's/^\s*- \[ \] //')
+
     RETRY_COUNT=0
     OPUS_OBTAINED=false
     MODEL_OBTAINED=false
@@ -577,6 +723,7 @@ for ((i=1; i<=ITERATIONS; i++)); do
 
     # Stage 1: Try Opus exclusively first
     while [ $RETRY_COUNT -lt $INITIAL_OPUS_RETRIES ]; do
+        start_timer
         claude_json=$(claude --output-format json --model opus --permission-mode acceptEdits -p "Find the highest-priority task from the TODO file and work only on that task.
 
 Here are the current TODO items and progress:
@@ -599,6 +746,7 @@ IMPORTANT: Only work on a SINGLE task per iteration.
 
 If, while working on the task, you determine ALL tasks are complete, output exactly this:
 <promise>COMPLETE</promise>" 2>/dev/null) || CLAUDE_EXIT_CODE=$?
+        stop_timer
 
         # Extract actual model used
         ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | keys[0] // "unknown"')
@@ -638,6 +786,7 @@ If, while working on the task, you determine ALL tasks are complete, output exac
                 TARGET_MODEL="$REQUESTED_MODEL"
             fi
 
+            start_timer
             claude_json=$(claude --output-format json --model "$MODEL_TO_TRY" --permission-mode acceptEdits -p "Find the highest-priority task from the TODO file and work only on that task.
 
 Here are the current TODO items and progress:
@@ -660,6 +809,7 @@ IMPORTANT: Only work on a SINGLE task per iteration.
 
 If, while working on the task, you determine ALL tasks are complete, output exactly this:
 <promise>COMPLETE</promise>" 2>/dev/null) || CLAUDE_EXIT_CODE=$?
+            stop_timer
 
             # Extract actual model used
             ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | keys[0] // "unknown"')
@@ -683,10 +833,60 @@ If, while working on the task, you determine ALL tasks are complete, output exac
             fi
         done
 
-        # If still no model obtained, fail hard
+    fi
+
+    # Stage 3: Last resort - try Haiku if both Opus and Sonnet failed
+    if [ "$MODEL_OBTAINED" = false ]; then
+        echo "✗ both $REQUESTED_MODEL and $FALLBACK_MODEL unavailable, trying $LAST_RESORT_MODEL..."
+        RETRY_COUNT=0
+
+        while [ $RETRY_COUNT -lt $HAIKU_RETRIES ]; do
+            start_timer
+            claude_json=$(claude --output-format json --model haiku --permission-mode acceptEdits -p "Find the highest-priority task from the TODO file and work only on that task.
+
+Here are the current TODO items and progress:
+
+@$TODO_FILE
+
+@$PROGRESS_FILE
+
+Guidelines:
+1. Pick ONE task from the TODO file that you determine has the highest priority
+2. Work ONLY on that task - do not work on multiple tasks
+3. Update the TODO file by marking the task as complete (change [ ] to [x]) or updating its status
+4. After completing the task, append your progress to the progress file (@$PROGRESS_FILE) with this format:
+   - Current date/time
+   - Task name
+   - What was accomplished
+   - Next steps (if any)
+
+IMPORTANT: Only work on a SINGLE task per iteration.
+
+If, while working on the task, you determine ALL tasks are complete, output exactly this:
+<promise>COMPLETE</promise>" 2>/dev/null) || CLAUDE_EXIT_CODE=$?
+            stop_timer
+
+            # Extract actual model used
+            ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | keys[0] // "unknown"')
+
+            # Check if we got Haiku
+            if echo "$ACTUAL_MODEL" | grep -qi "$LAST_RESORT_MODEL"; then
+                echo "✓ $LAST_RESORT_MODEL (last resort)"
+                MODEL_OBTAINED=true
+                break
+            else
+                RETRY_COUNT=$((RETRY_COUNT + 1))
+                if [ $RETRY_COUNT -lt $HAIKU_RETRIES ]; then
+                    echo "✗ got $ACTUAL_MODEL, retrying ($RETRY_COUNT/$HAIKU_RETRIES)..."
+                    sleep $RETRY_DELAY
+                fi
+            fi
+        done
+
+        # Hard failure if even Haiku is unavailable
         if [ "$MODEL_OBTAINED" = false ]; then
-            log_error "Both $REQUESTED_MODEL and $FALLBACK_MODEL are unavailable after all retries."
-            log_error "Refusing to degrade to lower-quality models. Exiting."
+            log_error "All models ($REQUESTED_MODEL, $FALLBACK_MODEL, $LAST_RESORT_MODEL) are unavailable."
+            log_error "Claude API may be experiencing issues. Exiting."
             exit 1
         fi
     fi
@@ -697,7 +897,13 @@ If, while working on the task, you determine ALL tasks are complete, output exac
     # Extract and log metrics
     extract_iteration_metrics "$claude_json" "$ITERATION_START"
 
-    # Display interaction result
+    # Auto-commit changes if files were modified
+    if [ "$ITERATION_FILES_CHANGED" -gt 0 ]; then
+        commit_changes "ralph: $CURRENT_TASK"
+    fi
+
+    # Display interaction result with phase separator
+    echo "--- Claude Output ---"
     echo "$result"
     echo ""
 
