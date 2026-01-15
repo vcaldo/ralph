@@ -953,7 +953,7 @@ If, while working on the task, you determine ALL tasks are complete, output exac
 
     # Auto-commit changes if files were modified
     if [ "$ITERATION_FILES_CHANGED" -gt 0 ]; then
-        commit_changes "ralph: $CURRENT_TASK"
+        commit_changes "$CURRENT_TASK"
     fi
 
     # Display interaction result with phase separator
