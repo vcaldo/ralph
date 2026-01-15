@@ -362,10 +362,12 @@ calculate_accurate_cost() {
         # Calculate cost per iteration
         map(
             (.model | get_tier) as $tier |
+            ((.usage.input_tokens / 1000000) * ($tier | get_prices | .input)) as $input_cost |
+            ((.usage.output_tokens / 1000000) * ($tier | get_prices | .output)) as $output_cost |
             {
                 tier: $tier,
-                input_cost: (.usage.input_tokens / 1000000) * ($tier | get_prices | .input),
-                output_cost: (.usage.output_tokens / 1000000) * ($tier | get_prices | .output)
+                input_cost: $input_cost,
+                output_cost: $output_cost
             }
         )
         | {
