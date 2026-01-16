@@ -743,7 +743,7 @@ for ((i=1; i<=ITERATIONS; i++)); do
     if [ "$POORMAN_MODE" = true ]; then
         # Poorman mode: try sonnet once, accept any model
         start_timer
-        claude_json=$(claude --output-format json --model sonnet --permission-mode acceptEdits -p "Find the highest-priority task from the TODO file and work only on that task.
+        claude_json=$(claude --output-format json --model sonnet --permission-mode acceptall -p "Find the highest-priority task from the TODO file and work only on that task.
 
 Here are the current TODO items and progress:
 
@@ -779,7 +779,7 @@ If, while working on the task, you determine ALL tasks are complete, output exac
         # Stage 1: Try Opus exclusively first
     while [ $RETRY_COUNT -lt $INITIAL_OPUS_RETRIES ]; do
         start_timer
-        claude_json=$(claude --output-format json --model opus --permission-mode acceptEdits -p "Find the highest-priority task from the TODO file and work only on that task.
+        claude_json=$(claude --output-format json --model opus --permission-mode acceptall -p "Find the highest-priority task from the TODO file and work only on that task.
 
 Here are the current TODO items and progress:
 
@@ -842,7 +842,7 @@ If, while working on the task, you determine ALL tasks are complete, output exac
             fi
 
             start_timer
-            claude_json=$(claude --output-format json --model "$MODEL_TO_TRY" --permission-mode acceptEdits -p "Find the highest-priority task from the TODO file and work only on that task.
+            claude_json=$(claude --output-format json --model "$MODEL_TO_TRY" --permission-mode acceptall -p "Find the highest-priority task from the TODO file and work only on that task.
 
 Here are the current TODO items and progress:
 
@@ -897,7 +897,7 @@ If, while working on the task, you determine ALL tasks are complete, output exac
 
         while [ $RETRY_COUNT -lt $HAIKU_RETRIES ]; do
             start_timer
-            claude_json=$(claude --output-format json --model haiku --permission-mode acceptEdits -p "Find the highest-priority task from the TODO file and work only on that task.
+            claude_json=$(claude --output-format json --model haiku --permission-mode acceptall -p "Find the highest-priority task from the TODO file and work only on that task.
 
 Here are the current TODO items and progress:
 
