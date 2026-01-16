@@ -42,10 +42,10 @@ CLAUDE_EXIT_CODE=0
 REQUESTED_MODEL="opus"
 FALLBACK_MODEL="sonnet"
 LAST_RESORT_MODEL="haiku"
-INITIAL_OPUS_RETRIES=5    # Try Opus first
-ALTERNATE_RETRIES=6       # Then alternate between Sonnet and Opus
+INITIAL_OPUS_RETRIES=12    # Try Opus first
+ALTERNATE_RETRIES=24       # Then alternate between Sonnet and Opus
 HAIKU_RETRIES=3            # Fail fast - if Haiku is unavailable, API has major issues
-RETRY_DELAY=5              # Fixed 15-second interval
+RETRY_DELAY=30             # Fixed 30-second interval
 POORMAN_MODE=false         # Skip retry logic, try sonnet once and accept any model
 
 # Model pricing (per million tokens) - easy to update when prices change
