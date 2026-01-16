@@ -766,7 +766,8 @@ IMPORTANT: Only work on a SINGLE task per iteration.
 If, while working on the task, you determine ALL tasks are complete, output exactly this:
 <promise>COMPLETE</promise>" 2>/dev/null) || CLAUDE_EXIT_CODE=$?
         stop_timer
-        ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | keys[0] // "unknown"')
+        ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | keys[0] // "unknown"' 2>/dev/null)
+        [[ -z "$ACTUAL_MODEL" ]] && ACTUAL_MODEL="unknown"
         echo "✓ $ACTUAL_MODEL (poorman mode)"
     else
         # Normal mode: multi-stage retry logic
@@ -804,7 +805,8 @@ If, while working on the task, you determine ALL tasks are complete, output exac
         stop_timer
 
         # Extract actual model used
-        ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | keys[0] // "unknown"')
+        ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | keys[0] // "unknown"' 2>/dev/null)
+        [[ -z "$ACTUAL_MODEL" ]] && ACTUAL_MODEL="unknown"
 
         # Check if requested model matches actual model
         if echo "$ACTUAL_MODEL" | grep -qi "$REQUESTED_MODEL"; then
@@ -867,7 +869,8 @@ If, while working on the task, you determine ALL tasks are complete, output exac
             stop_timer
 
             # Extract actual model used
-            ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | keys[0] // "unknown"')
+            ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | keys[0] // "unknown"' 2>/dev/null)
+            [[ -z "$ACTUAL_MODEL" ]] && ACTUAL_MODEL="unknown"
 
             # Check if we got the target model
             if echo "$ACTUAL_MODEL" | grep -qi "$TARGET_MODEL"; then
@@ -922,7 +925,8 @@ If, while working on the task, you determine ALL tasks are complete, output exac
             stop_timer
 
             # Extract actual model used
-            ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | keys[0] // "unknown"')
+            ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | keys[0] // "unknown"' 2>/dev/null)
+            [[ -z "$ACTUAL_MODEL" ]] && ACTUAL_MODEL="unknown"
 
             # Check if we got Haiku
             if echo "$ACTUAL_MODEL" | grep -qi "$LAST_RESORT_MODEL"; then
