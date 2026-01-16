@@ -5,26 +5,27 @@ Automated iterative development using Claude. Ralph reads tasks from a TODO file
 ## Quick Start
 
 ```bash
-# 1. Create a TODO.md file with tasks
-cp TODO.md.example TODO.md
-# Edit TODO.md with your tasks
+# 1. Create a plan directory with TODO.md
+mkdir -p plans/my-plan
+cp TODO.md.example plans/my-plan/TODO.md
+# Edit plans/my-plan/TODO.md with your tasks
 
 # 2. Run Ralph
-./scripts/ralph.sh 10
+./scripts/ralph.sh plans/my-plan 10
 
 # 3. Watch progress
-tail -f progress.txt
+tail -f plans/my-plan/progress.txt
 ```
 
 ## Usage
 
 ### Basic Command
 ```bash
-./ralph.sh [--poorman] <plan-dir> <iterations>
+./scripts/ralph.sh <plan-dir> <iterations>
 ```
 
-### Options
-- **--poorman**: Skip retry logic, try sonnet once and accept any model (cheaper, faster)
+### Optional Flags
+Run `./scripts/ralph.sh --help` to see supported flags for this version.
 
 ### Arguments
 - **plan-dir** (required): Directory containing the plan (must have `TODO.md`)
@@ -38,27 +39,17 @@ The script will look for `TODO.md` in the plan directory and create:
 
 **Run 10 iterations on arena-v2 plan**
 ```bash
-./ralph.sh plans/arena-v2/ 10
+./scripts/ralph.sh plans/arena-v2/ 10
 ```
 
 **Run 20 iterations on ml-dashboard plan**
 ```bash
-./ralph.sh plans/ml-dashboard-port-refactor/ 20
+./scripts/ralph.sh plans/ml-dashboard-port-refactor/ 20
 ```
 
 **Run 5 iterations on any plan directory**
 ```bash
-./ralph.sh plans/my-custom-plan/ 5
-```
-
-**Run in poorman mode (cheaper, no retries)**
-```bash
-./ralph.sh --poorman plans/arena-v2/ 10
-```
-
-**Run via make (if target added)**
-```bash
-make ralph ITERATIONS=10
+./scripts/ralph.sh plans/my-custom-plan/ 5
 ```
 
 ## How Ralph Works
@@ -82,80 +73,12 @@ make ralph ITERATIONS=10
 - **Early exit**: When Claude outputs `<promise>COMPLETE</promise>`
 - **Normal exit**: When all iterations complete
 
-## File Formats
-
-### TODO.md Format
-Standard markdown with checkbox tasks:
-
-```markdown
-# Tasks
-
-## High Priority
-- [ ] Feature A
-- [ ] Bug fix B
-
-## Medium Priority
-- [ ] Feature C
-
-## Completed
-- [x] Feature X
-```
-
-**Rules**:
-- Use `- [ ]` for incomplete tasks
-- Use `- [x]` for completed tasks
-- Ralph reads unchecked items as work to do
-- Organize by priority (high → medium → low)
-
-### progress.txt Format
-Freeform log file. Ralph appends entries like:
-
-```
-2026-01-14 10:30:00 - Feature A
-  Completed: Setup database schema and migrations
-  Next: Add API endpoints
-
-2026-01-14 11:15:00 - Bug fix B
-  Completed: Fixed race condition in login flow
-  Tests: All passing
-```
-
-**Format is flexible** - Claude appends what makes sense for each task.
-
-## Requirements
-
-### Git Configuration
-Ralph commits use your git identity. Verify it's set:
-
-```bash
-# Check current config
-git config user.name
-git config user.email
-
-# Set global config (if needed)
-git config --global user.name "Your Name"
-git config --global user.email "your@email.com"
-
-# Set for this repo only
-git config user.name "Your Name"
-git config user.email "your@email.com"
-```
-
-### Claude CLI
-Requires `claude` command to be installed and in PATH:
-
-```bash
-# Verify Claude is available
-which claude
-claude --version
-```
-
 ## Workflow Examples
 
 ### Example 1: Arena Mini-App Development
 ```bash
 # Create tasks
-cat > TODO.md << 'EOF'
+cat > plans/arena/TODO.md << 'EOF'
 # Arena Mini-App Tasks
 
 ## High Priority
@@ -173,10 +96,10 @@ cat > TODO.md << 'EOF'
 EOF
 
 # Run ralph
-./scripts/ralph.sh 20
+./scripts/ralph.sh plans/arena 20
 
 # Check progress
-cat progress.txt
+cat plans/arena/progress.txt
 
 # Review commits
 git log --oneline -20
@@ -185,7 +108,7 @@ git log --oneline -20
 ### Example 2: Bug Fix Sprint
 ```bash
 # Create bug list
-cat > bugs.md << 'EOF'
+cat > plans/bugs/TODO.md << 'EOF'
 # Critical Bugs
 
 ## High Priority
@@ -197,17 +120,17 @@ cat > bugs.md << 'EOF'
 - [ ] Fix typo in leaderboard
 EOF
 
-# Run ralph on bug list
-./scripts/ralph.sh 10 bugs.md bug_progress.txt
+# Run ralph
+./scripts/ralph.sh plans/bugs 10
 
 # Clean up completed bugs
-grep -n "\\[x\\]" bugs.md
+grep -n "\\[x\\]" plans/bugs/TODO.md
 ```
 
 ### Example 3: Feature Development
 ```bash
 # Feature tasks
-cat > features.md << 'EOF'
+cat > plans/features/TODO.md << 'EOF'
 # New Features
 
 ## High Priority
@@ -217,74 +140,8 @@ cat > features.md << 'EOF'
 EOF
 
 # Run with monitoring
-./scripts/ralph.sh 15 features.md feature_progress.txt &
-watch -n 5 "tail -10 feature_progress.txt"
-```
-
-## Monitoring & Logs
-
-### Watch Progress in Real-time
-```bash
-# Terminal 1: Run Ralph
-./scripts/ralph.sh 20
-
-# Terminal 2: Monitor progress
-tail -f progress.txt
-
-# Terminal 3: Watch git commits
-watch -n 2 "git log --oneline -5"
-```
-
-### Check Status Between Runs
-```bash
-# See what's been completed
-grep "\\[x\\]" TODO.md
-
-# See what's pending
-grep "\\[ \\]" TODO.md
-
-# Check last progress entries
-tail -20 progress.txt
-
-# Check recent commits
-git log --oneline -10
-```
-
-### Auto-Commit Format
-
-Ralph automatically commits changes after each iteration if files were modified. Commits follow this format:
-
-```
-ralph: <task description>
-```
-
-**Examples:**
-```bash
-# If the task was "Add check_dependencies() function to ralph.sh"
-git log --oneline -1
-# Output: abc1234 ralph: Add check_dependencies() function to ralph.sh
-
-# If the task was "Implement Stage 1 retry loop"
-git log --oneline -1
-# Output: def5678 ralph: Implement Stage 1 retry loop
-```
-
-**How it works:**
-- Ralph extracts the first unchecked task from TODO.md
-- After completing the task, Ralph commits with `ralph: <task>` as the message
-- Commits use your git identity (not Claude's)
-- No commit is made if no files were changed during the iteration
-
-**Check Ralph commits:**
-```bash
-# View all Ralph commits in current branch
-git log --oneline --grep="^ralph:"
-
-# Count Ralph commits
-git log --oneline --grep="^ralph:" | wc -l
-
-# See what files Ralph modified
-git log --grep="^ralph:" --stat
+./scripts/ralph.sh plans/features 15 &
+watch -n 5 "tail -10 plans/features/progress.txt"
 ```
 
 ## Iteration Message Flow
@@ -302,40 +159,20 @@ Iteration N
 
 **Phase 2: Model Acquisition**
 
-In normal mode:
-```
-Trying opus...
-```
-Then one of:
-- `✓ opus` - Got requested model
-- `✗ got [model], retrying (N/M)...` - Wrong model, will retry
-- `✗ opus unavailable, trying alternating strategy...` - Moving to Stage 2
+Messages vary by version/flags, but generally indicate model selection, retries, or fallbacks.
 
-In poorman mode (--poorman):
-- `✓ [model] (poorman mode)` - Accepts any model returned
-
-**Phase 3: Model Fallback (if needed)**
-
-Skipped in poorman mode.
-
-In normal mode, Stage 2 alternates between Sonnet and Opus:
-- `✓ opus` - Got Opus on retry
-- `✓ sonnet (fallback)` - Accepted Sonnet as fallback
-- `✗ got [model], retrying (N/M)...` - Still retrying
-- Hard failure exits with error message
-
-**Phase 4: Claude's Work Output**
+**Phase 3: Claude's Work Output**
 ```
 [Claude's result text - task completion, explanations, etc.]
 ```
 
-**Phase 5: Auto-Commit (if files changed)**
+**Phase 4: Auto-Commit (if files changed)**
 ```
 ✓ Committed: ralph: [task description]
 ```
 Or if no changes: `ℹ No changes to commit`
 
-**Phase 6: Iteration Metrics**
+**Phase 5: Iteration Metrics**
 ```
 --- Iteration Metrics ---
 Duration: Xm XXs
@@ -350,7 +187,7 @@ Files changed: X
 Success: ✓
 ```
 
-**Phase 7: Completion Check**
+**Phase 6: Completion Check**
 If `<promise>COMPLETE</promise>` found in output:
 ```
 ==================================================
@@ -361,15 +198,7 @@ If `<promise>COMPLETE</promise>` found in output:
 
 ### Message Source Reference
 
-| Phase | Source Location | Function/Code |
-|-------|----------------|---------------|
-| Iteration Header | ralph.sh:651-654 | Main loop |
-| Model Acquisition | ralph.sh:674-721 | Stage 1 retry |
-| Model Fallback | ralph.sh:724-790 | Stage 2 retry |
-| Claude Output | ralph.sh:804 | Main loop |
-| Auto-Commit | ralph.sh:799-801 | `commit_changes()` |
-| Iteration Metrics | ralph.sh:808 | `print_metrics_summary()` |
-| Completion | ralph.sh:812-826 | Main loop |
+See `scripts/ralph.sh` for the current message flow and function names.
 
 ## Metrics & Performance Tracking
 
@@ -385,7 +214,7 @@ After each iteration completes, Ralph displays metrics in a simple list format:
 
 --- Iteration Metrics ---
 Duration: 1m 27s
-Model: claude-opus-4-5-20251101
+Model: [current model]
 Status: result
 Input tokens: 1234
 Output tokens: 567
@@ -398,7 +227,7 @@ Success: ✓
 
 **What each metric means:**
 - **Duration**: Total time for the interaction (API call + Claude processing)
-- **Model**: Which Claude model handled the request (e.g., claude-opus-4-5-20251101)
+- **Model**: Which Claude model handled the request
 - **Status**: Response type from Claude (result = successful response, error = failed request)
 - **Input Tokens**: Tokens consumed by your task description and context
 - **Output Tokens**: Tokens generated in Claude's response
@@ -409,50 +238,13 @@ Success: ✓
 - **Files Changed**: Number of files modified during this iteration
 - **Success**: ✓ (success) or ✗ (failed with exit code)
 
-### Final Summary
-
-When Ralph completes all iterations (or early exits), it displays an aggregate summary:
-
-```
-==================================================
-                  FINAL SUMMARY
-==================================================
-
-Iterations:
-  Completed:       7 / 10
-  Success Rate:    100%
-
-Duration:
-  Total:           12m 15s
-  Average:         1m 45s per iteration
-  Min:             47s
-  Max:             2m 31s
-
-Token Usage:
-  Total Input:     8,456 tokens
-  Total Output:    3,912 tokens
-  Total:           12,368 tokens
-  Average:         1,767 tokens per iteration
-
-Cache Performance:
-  Total Created:   2,340 tokens
-  Total Read:      6,234 tokens
-  Overall Hit Rate: 42%
-
-Files Changed:
-  Total:           21 files
-  Average:         3 files per iteration
-
-ℹ  Metrics log saved to: ralph_metrics.jsonl
-```
-
 ### Metrics Log File (ralph_metrics.jsonl)
 
 Ralph saves detailed metrics to `ralph_metrics.jsonl` - one JSON object per line, perfect for analysis:
 
 ```json
-{"iteration":1,"timestamp":"2026-01-15T10:30:45Z","duration_seconds":87,"model":"claude-opus-4-5-20251101","stop_reason":"result","usage":{"input_tokens":1234,"output_tokens":567,"cache_creation_tokens":0,"cache_read_tokens":890,"total_tokens":1801},"files_changed":3,"success":true,"exit_code":0}
-{"iteration":2,"timestamp":"2026-01-15T10:32:22Z","duration_seconds":95,"model":"claude-opus-4-5-20251101","stop_reason":"result","usage":{"input_tokens":1156,"output_tokens":612,"cache_creation_tokens":0,"cache_read_tokens":945,"total_tokens":1768},"files_changed":2,"success":true,"exit_code":0}
+{"iteration":1,"timestamp":"2026-01-15T10:30:45Z","duration_seconds":87,"model":"<model>","stop_reason":"result","usage":{"input_tokens":1234,"output_tokens":567,"cache_creation_tokens":0,"cache_read_tokens":890,"total_tokens":1801},"files_changed":3,"success":true,"exit_code":0}
+{"iteration":2,"timestamp":"2026-01-15T10:32:22Z","duration_seconds":95,"model":"<model>","stop_reason":"result","usage":{"input_tokens":1156,"output_tokens":612,"cache_creation_tokens":0,"cache_read_tokens":945,"total_tokens":1768},"files_changed":2,"success":true,"exit_code":0}
 ```
 
 **Field meanings in JSONL:**

@@ -1,6 +1,6 @@
 # Ralph - Automated Iterative Development with Claude
 
-Ralph is an automation workflow that uses Claude to systematically work through complex development tasks by breaking them into smaller, manageable pieces. Based on the [Ralph technique](https://www.humanlayer.dev/blog/brief-history-of-ralph), it enables autonomous, iterative development with full visibility and control.
+Ralph is an automation workflow that uses Claude to systematically work through complex development tasks by breaking them into smaller, manageable pieces. Based on the [Ralph technique](https://www.humanlayer.dev/blog/brief-history-of-ralph), it enables autonomous, iterative development.
 
 **TL;DR:**
 ```bash
@@ -13,7 +13,7 @@ claude --version
 git config user.name
 git config user.email
 
-# Create your first plan
+# Create your first plan (TODO.example.md is a template in this repo)
 cp TODO.example.md plans/my-feature/TODO.md
 ./ralph.sh plans/my-feature/ 999
 ```
@@ -43,19 +43,20 @@ ls -ltr ~/.claude/plans/
 Copy the plan to your project's plans directory:
 
 ```bash
-# Create a descriptive plan directory inside your repo
+# Create a plan directory inside your repo and add it to .gitignore
 mkdir -p plans/ip-cam-telegram-bot
+echo "plans/" >> .gitignore
 
-# Copy the plan file
-cp ~/.claude/plans/your-plan-file.md plans/ip-cam-telegram-bot/
+# Copy the plan file (rename as needed)
+cp ~/.claude/plans/your-plan-file.md plans/ip-cam-telegram-bot/plan.md
 
-# Copy the TODO template
+# Copy the TODO template from this repo
 cp TODO.example.md plans/ip-cam-telegram-bot/TODO.md
 ```
 
 ### 3. Break Down the Plan
 
-Start a new Claude session and ask Calude to brea down the plan into actionable tasks:
+Start a new Claude session and ask Claude to break down the plan into actionable tasks:
 
 ```
 I have a plan at plans/ip-cam-telegram-bot/plan.md.
