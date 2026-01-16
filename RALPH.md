@@ -404,7 +404,7 @@ Success: ✓
 - **Output Tokens**: Tokens generated in Claude's response
 - **Total Tokens**: Sum of input and output tokens for this iteration
 - **Cache Created**: Tokens used to create the prompt cache (first run with context)
-- **Cache Read**: Tokens read from cached context (subsequent runs, lower cost)
+- **Cache Read**: Tokens read from cached context (subsequent runs)
 - **Cache Hit Rate**: Percentage of input tokens from cache vs computed
 - **Files Changed**: Number of files modified during this iteration
 - **Success**: ✓ (success) or ✗ (failed with exit code)
@@ -442,11 +442,6 @@ Cache Performance:
 Files Changed:
   Total:           21 files
   Average:         3 files per iteration
-
-Cost Estimate (claude-opus-4-5-20251101):
-  Input tokens:    $0.025
-  Output tokens:   $0.047
-  Total:           $0.072
 
 ℹ  Metrics log saved to: ralph_metrics.jsonl
 ```
@@ -493,9 +488,6 @@ cat ralph_metrics.jsonl | jq -s 'min_by(.duration_seconds)'
 # Count successful vs failed iterations
 cat ralph_metrics.jsonl | jq -s '[.[] | .success] | group_by(.) | map({success: .[0], count: length})'
 
-# Calculate total cost (Opus pricing: $3.00/MTok input, $12.00/MTok output)
-cat ralph_metrics.jsonl | jq -s 'map(.usage | (.input_tokens/1000000)*3.00 + (.output_tokens/1000000)*12.00) | add'
-
 # Find iterations with cache hits
 cat ralph_metrics.jsonl | jq '.[] | select(.usage.cache_read_tokens > 0)'
 
@@ -503,66 +495,18 @@ cat ralph_metrics.jsonl | jq '.[] | select(.usage.cache_read_tokens > 0)'
 cat ralph_metrics.jsonl | jq -s '[.[] | .usage.cache_read_tokens] | add as $read | [.[] | .usage.input_tokens] | add as $input | (($read / $input) * 100)'
 ```
 
-### Dynamic Cost Estimation
-
-Ralph automatically calculates costs based on the **actual Claude model used** in your session, not a hardcoded tier. Cost estimates are shown in the final summary.
-
-**How it works:**
-1. Ralph captures the model name from each interaction (e.g., `claude-opus-4-5-20251101`)
-2. At the end, it extracts the primary model from the metrics
-3. Applies that model's actual pricing to calculate total session cost
-4. Shows the model name in the cost estimate header
-
-**Current Model Pricing (per million tokens):**
-
-| Model | Input | Output | Example Cost (1M input + 1M output) |
-|-------|-------|--------|-------------------------------------|
-| Haiku | $0.80 | $4.00 | $4.80 |
-| Sonnet | $3.00 | $12.00 | $15.00 |
-| Opus | $15.00 | $45.00 | $60.00 |
-
-**Example output:**
-```
-Cost Estimate (claude-opus-4-5-20251101):
-  Input tokens:    $0.025
-  Output tokens:   $0.047
-  Total:           $0.072
-```
-
-The model name in the header (e.g., `claude-opus-4-5-20251101`) is the actual model that processed your requests during this session, ensuring cost estimates are accurate for your specific usage.
-
-**Manual cost calculation with jq:**
-
-If you want to calculate costs with a specific model's pricing:
-
-```bash
-# Calculate with Opus pricing
-cat ralph_metrics.jsonl | jq -s 'map(.usage | (.input_tokens/1000000)*15.00 + (.output_tokens/1000000)*45.00) | add'
-
-# Calculate with Haiku pricing
-cat ralph_metrics.jsonl | jq -s 'map(.usage | (.input_tokens/1000000)*0.80 + (.output_tokens/1000000)*4.00) | add'
-
-# Calculate with Sonnet pricing
-cat ralph_metrics.jsonl | jq -s 'map(.usage | (.input_tokens/1000000)*3.00 + (.output_tokens/1000000)*12.00) | add'
-```
-
 ### Performance Tips
 
 **Optimize token usage:**
 - Keep tasks focused and specific (less context needed)
 - Use simpler task descriptions (fewer input tokens)
-- Let prompt caching work (higher cache hit rate = lower cost)
+- Let prompt caching work (higher cache hit rate)
 - Monitor average tokens per iteration and adjust task complexity
 
 **Monitor duration:**
 - If iterations are too slow, consider smaller tasks
 - Average duration helps predict total run time
 - Cache creation (first run) is slower than cache hits
-
-**Track costs:**
-- Review final cost estimate to understand expenses
-- Cache performance directly affects costs
-- Token usage grows with code complexity and context size
 
 ### Metrics File Management
 
