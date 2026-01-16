@@ -38,15 +38,9 @@ ITERATION_FILES_CHANGED=0
 ITERATION_SUCCESS="true"
 CLAUDE_EXIT_CODE=0
 
-# Model retry configuration
-REQUESTED_MODEL="opus"
-FALLBACK_MODEL="sonnet"
-LAST_RESORT_MODEL="haiku"
-INITIAL_OPUS_RETRIES=12    # Try Opus first
-ALTERNATE_RETRIES=24       # Then alternate between Sonnet and Opus
-HAIKU_RETRIES=3            # Fail fast - if Haiku is unavailable, API has major issues
-RETRY_DELAY=30             # Fixed 30-second interval
-POORMAN_MODE=false         # Skip retry logic, try sonnet once and accept any model
+# Model configuration
+REQUESTED_MODEL="opus"     # Configurable via --model flag, defaults to opus
+POORMAN_MODE=false         # Accept any model returned (no model verification)
 
 # Model pricing (per million tokens) - easy to update when prices change
 HAIKU_INPUT_PRICE=0.80
@@ -412,7 +406,7 @@ extract_iteration_metrics() {
     fi
 
     # Extract metrics from JSON with defaults
-    ITERATION_MODEL=$(echo "$json" | jq -r '.modelUsage | keys[0] // "unknown"')
+    ITERATION_MODEL=$(echo "$json" | jq -r '.modelUsage | to_entries | max_by(.value.inputTokens + .value.outputTokens) | .key // "unknown"' 2>/dev/null || echo "unknown")
     ITERATION_STOP_REASON=$(echo "$json" | jq -r '.type // "unknown"')
     ITERATION_INPUT_TOKENS=$(echo "$json" | jq -r '.usage.input_tokens // 0')
     ITERATION_OUTPUT_TOKENS=$(echo "$json" | jq -r '.usage.output_tokens // 0')
@@ -614,6 +608,22 @@ print_final_summary() {
 # Parse optional flags
 while [[ "${1:-}" == --* ]]; do
     case "$1" in
+        --model)
+            if [[ -z "${2:-}" ]] || [[ "${2:-}" == --* ]]; then
+                log_error "--model requires an argument (haiku|sonnet|opus)"
+                exit 1
+            fi
+            case "$2" in
+                haiku|sonnet|opus)
+                    REQUESTED_MODEL="$2"
+                    shift 2
+                    ;;
+                *)
+                    log_error "Invalid model: $2 (must be haiku, sonnet, or opus)"
+                    exit 1
+                    ;;
+            esac
+            ;;
         --poorman)
             POORMAN_MODE=true
             shift
@@ -626,18 +636,20 @@ while [[ "${1:-}" == --* ]]; do
 done
 
 if [ -z "${1:-}" ] || [ -z "${2:-}" ]; then
-    log_error "Usage: $0 [--poorman] <plan-dir> <iterations>"
+    log_error "Usage: $0 [--model <haiku|sonnet|opus>] [--poorman] <plan-dir> <iterations>"
     echo ""
     echo "Options:"
-    echo "  --poorman       Skip retry logic, try sonnet once and accept any model"
+    echo "  --model MODEL   Specify which model to use (haiku, sonnet, or opus). Default: opus"
+    echo "  --poorman       Accept any model returned (no model verification)"
     echo ""
     echo "Arguments:"
     echo "  plan-dir        Directory containing the plan (must have TODO.md)"
     echo "  iterations      Maximum number of iterations to run"
     echo ""
     echo "Examples:"
-    echo "  $0 plans/arena-v2/ 10              # Run 10 iterations on arena-v2 plan"
-    echo "  $0 --poorman plans/arena-v2/ 10   # Run without retry logic (cheaper)"
+    echo "  $0 plans/arena-v2/ 10                        # Run 10 iterations using opus"
+    echo "  $0 --model sonnet plans/arena-v2/ 10        # Run using sonnet"
+    echo "  $0 --model sonnet --poorman plans/arena-v2/ 10  # Run with sonnet, accept any model"
     exit 1
 fi
 
@@ -675,11 +687,12 @@ fi
 log_info "Ralph Automation Script"
 log_info "Plan directory: $PLAN_DIR"
 log_info "Iterations: $ITERATIONS"
+log_info "Model: $REQUESTED_MODEL"
 log_info "TODO file: $TODO_FILE"
 log_info "Progress file: $PROGRESS_FILE"
 log_info "Metrics file: $METRICS_LOG"
 if [ "$POORMAN_MODE" = true ]; then
-    log_warn "Poorman mode: retry logic disabled, using sonnet"
+    log_warn "Poorman mode: model verification disabled"
 fi
 echo ""
 
@@ -731,7 +744,6 @@ for ((i=1; i<=ITERATIONS; i++)); do
     # Use @file syntax to reference files that Claude can read and edit
     # Use --output-format json to capture metrics
     # Separate stdout (JSON) from stderr to avoid corrupting JSON with error messages
-    # Two-tier retry strategy: first try Opus, then fall back to Sonnet if needed
 
     # Extract current task from TODO file (first unchecked item)
     # Format: "- [ ] Task description" -> "Task description"
@@ -741,9 +753,9 @@ for ((i=1; i<=ITERATIONS; i++)); do
     CLAUDE_EXIT_CODE=0
 
     if [ "$POORMAN_MODE" = true ]; then
-        # Poorman mode: try sonnet once, accept any model
+        # Poorman mode: try requested model once, accept any model
         start_timer
-        claude_json=$(claude --output-format json --model sonnet --permission-mode bypassPermissions -p "Find the highest-priority task from the TODO file and work only on that task.
+        claude_json=$(claude --output-format json --model "$REQUESTED_MODEL" --permission-mode bypassPermissions -p "Find the highest-priority task from the TODO file and work only on that task.
 
 Here are the current TODO items and progress:
 
@@ -766,21 +778,14 @@ IMPORTANT: Only work on a SINGLE task per iteration.
 If, while working on the task, you determine ALL tasks are complete, output exactly this:
 <promise>COMPLETE</promise>" 2>/dev/null) || CLAUDE_EXIT_CODE=$?
         stop_timer
-        ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | keys[0] // "unknown"' 2>/dev/null)
+        ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | to_entries | max_by(.value.inputTokens + .value.outputTokens) | .key // "unknown"' 2>/dev/null)
         [[ -z "$ACTUAL_MODEL" ]] && ACTUAL_MODEL="unknown"
-        echo "✓ $ACTUAL_MODEL (poorman mode)"
+        echo "✓ $ACTUAL_MODEL (poorman mode - any model accepted)"
     else
-        # Normal mode: multi-stage retry logic
-        RETRY_COUNT=0
-        OPUS_OBTAINED=false
-        MODEL_OBTAINED=false
-
-        echo "Trying $REQUESTED_MODEL..."
-
-        # Stage 1: Try Opus exclusively first
-    while [ $RETRY_COUNT -lt $INITIAL_OPUS_RETRIES ]; do
+        # Normal mode: try requested model once, fail if wrong model returned
+        echo "Requesting $REQUESTED_MODEL..."
         start_timer
-        claude_json=$(claude --output-format json --model opus --permission-mode bypassPermissions -p "Find the highest-priority task from the TODO file and work only on that task.
+        claude_json=$(claude --output-format json --model "$REQUESTED_MODEL" --permission-mode bypassPermissions -p "Find the highest-priority task from the TODO file and work only on that task.
 
 Here are the current TODO items and progress:
 
@@ -805,151 +810,18 @@ If, while working on the task, you determine ALL tasks are complete, output exac
         stop_timer
 
         # Extract actual model used
-        ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | keys[0] // "unknown"' 2>/dev/null)
+        ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | to_entries | max_by(.value.inputTokens + .value.outputTokens) | .key // "unknown"' 2>/dev/null)
         [[ -z "$ACTUAL_MODEL" ]] && ACTUAL_MODEL="unknown"
 
-        # Check if requested model matches actual model
+        # Check if requested model matches actual model (case-insensitive)
         if echo "$ACTUAL_MODEL" | grep -qi "$REQUESTED_MODEL"; then
-            # Success - got Opus
             echo "✓ $REQUESTED_MODEL"
-            OPUS_OBTAINED=true
-            MODEL_OBTAINED=true
-            break
         else
-            # Opus not available, prepare to retry
-            RETRY_COUNT=$((RETRY_COUNT + 1))
-            if [ $RETRY_COUNT -lt $INITIAL_OPUS_RETRIES ]; then
-                echo "✗ got $ACTUAL_MODEL, retrying ($RETRY_COUNT/$INITIAL_OPUS_RETRIES)..."
-                sleep $RETRY_DELAY
-            else
-                echo "✗ opus unavailable, trying alternating strategy..."
-            fi
-        fi
-    done
-
-    # Stage 2: Alternate between Sonnet and Opus if Stage 1 failed
-    if [ "$MODEL_OBTAINED" = false ]; then
-        RETRY_COUNT=0
-
-        while [ $RETRY_COUNT -lt $ALTERNATE_RETRIES ]; do
-            # Alternate: even attempts = Sonnet, odd attempts = Opus
-            if [ $((RETRY_COUNT % 2)) -eq 0 ]; then
-                # Try Sonnet
-                MODEL_TO_TRY="sonnet"
-                TARGET_MODEL="$FALLBACK_MODEL"
-            else
-                # Try Opus
-                MODEL_TO_TRY="opus"
-                TARGET_MODEL="$REQUESTED_MODEL"
-            fi
-
-            start_timer
-            claude_json=$(claude --output-format json --model "$MODEL_TO_TRY" --permission-mode bypassPermissions -p "Find the highest-priority task from the TODO file and work only on that task.
-
-Here are the current TODO items and progress:
-
-@$TODO_FILE
-
-@$PROGRESS_FILE
-
-Guidelines:
-1. Pick ONE task from the TODO file that you determine has the highest priority
-2. Work ONLY on that task - do not work on multiple tasks
-3. Update the TODO file by marking the task as complete (change [ ] to [x]) or updating its status
-4. After completing the task, append your progress to the progress file (@$PROGRESS_FILE) with this format:
-   - Current date/time
-   - Task name
-   - What was accomplished
-   - Next steps (if any)
-
-IMPORTANT: Only work on a SINGLE task per iteration.
-
-If, while working on the task, you determine ALL tasks are complete, output exactly this:
-<promise>COMPLETE</promise>" 2>/dev/null) || CLAUDE_EXIT_CODE=$?
-            stop_timer
-
-            # Extract actual model used
-            ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | keys[0] // "unknown"' 2>/dev/null)
-            [[ -z "$ACTUAL_MODEL" ]] && ACTUAL_MODEL="unknown"
-
-            # Check if we got the target model
-            if echo "$ACTUAL_MODEL" | grep -qi "$TARGET_MODEL"; then
-                if [ "$MODEL_TO_TRY" = "opus" ]; then
-                    echo "✓ $REQUESTED_MODEL"
-                    OPUS_OBTAINED=true
-                else
-                    echo "✓ $FALLBACK_MODEL (fallback)"
-                fi
-                MODEL_OBTAINED=true
-                break
-            else
-                RETRY_COUNT=$((RETRY_COUNT + 1))
-                if [ $RETRY_COUNT -lt $ALTERNATE_RETRIES ]; then
-                    echo "✗ got $ACTUAL_MODEL, retrying ($RETRY_COUNT/$ALTERNATE_RETRIES)..."
-                    sleep $RETRY_DELAY
-                fi
-            fi
-        done
-
-    fi
-
-    # Stage 3: Last resort - try Haiku if both Opus and Sonnet failed
-    if [ "$MODEL_OBTAINED" = false ]; then
-        echo "✗ both $REQUESTED_MODEL and $FALLBACK_MODEL unavailable, trying $LAST_RESORT_MODEL..."
-        RETRY_COUNT=0
-
-        while [ $RETRY_COUNT -lt $HAIKU_RETRIES ]; do
-            start_timer
-            claude_json=$(claude --output-format json --model haiku --permission-mode bypassPermissions -p "Find the highest-priority task from the TODO file and work only on that task.
-
-Here are the current TODO items and progress:
-
-@$TODO_FILE
-
-@$PROGRESS_FILE
-
-Guidelines:
-1. Pick ONE task from the TODO file that you determine has the highest priority
-2. Work ONLY on that task - do not work on multiple tasks
-3. Update the TODO file by marking the task as complete (change [ ] to [x]) or updating its status
-4. After completing the task, append your progress to the progress file (@$PROGRESS_FILE) with this format:
-   - Current date/time
-   - Task name
-   - What was accomplished
-   - Next steps (if any)
-
-IMPORTANT: Only work on a SINGLE task per iteration.
-
-If, while working on the task, you determine ALL tasks are complete, output exactly this:
-<promise>COMPLETE</promise>" 2>/dev/null) || CLAUDE_EXIT_CODE=$?
-            stop_timer
-
-            # Extract actual model used
-            ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | keys[0] // "unknown"' 2>/dev/null)
-            [[ -z "$ACTUAL_MODEL" ]] && ACTUAL_MODEL="unknown"
-
-            # Check if we got Haiku
-            if echo "$ACTUAL_MODEL" | grep -qi "$LAST_RESORT_MODEL"; then
-                echo "✓ $LAST_RESORT_MODEL (last resort)"
-                MODEL_OBTAINED=true
-                break
-            else
-                RETRY_COUNT=$((RETRY_COUNT + 1))
-                if [ $RETRY_COUNT -lt $HAIKU_RETRIES ]; then
-                    echo "✗ got $ACTUAL_MODEL, retrying ($RETRY_COUNT/$HAIKU_RETRIES)..."
-                    sleep $RETRY_DELAY
-                fi
-            fi
-        done
-
-        # Hard failure if even Haiku is unavailable
-        if [ "$MODEL_OBTAINED" = false ]; then
-            log_error "All models ($REQUESTED_MODEL, $FALLBACK_MODEL, $LAST_RESORT_MODEL) are unavailable."
-            log_error "Claude API may be experiencing issues. Exiting."
+            log_error "Requested $REQUESTED_MODEL but got $ACTUAL_MODEL"
+            log_error "Model unavailable, failing iteration"
             exit 1
         fi
     fi
-    fi  # End of poorman mode check
 
     # Extract text content from JSON for completion check and display
     result=$(jq -r '.result // ""' <<< "$claude_json")
