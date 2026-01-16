@@ -487,32 +487,3 @@ Iteration 2
 bash -x ./scripts/ralph.sh 5
 ```
 
-## Files Reference
-
-| File | Location | Purpose | Created by |
-|------|----------|---------|-----------|
-| `TODO.md` | `<plan-dir>/TODO.md` | Task list (required) | You |
-| `progress.txt` | `<plan-dir>/progress.txt` | Progress log | Ralph (auto-created) |
-| `ralph_metrics.jsonl` | `<plan-dir>/ralph_metrics.jsonl` | Detailed metrics (JSONL) | Ralph (auto-created) |
-| `ralph.sh` | Repository root | Main script | Provided |
-| `RALPH.md` | Repository root | This guide | Provided |
-
-**Note**: `ralph_metrics.jsonl` and `progress.txt` are gitignored by default (see `.gitignore`)
-
-## See Also
-
-- [CLAUDE.md](../CLAUDE.md) - Project overview
-- [Makefile](../Makefile) - Build targets
-- [scripts/](../scripts/) - Other utility scripts
-
-## Contributing
-
-To improve Ralph:
-1. Test with different task types
-2. Report edge cases or bugs
-3. Share workflow tips with team
-4. Suggest enhancements (see plan file)
-
----
-
-**Ralph** - Automate your development workflow with Claude
