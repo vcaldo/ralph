@@ -42,6 +42,11 @@ CLAUDE_EXIT_CODE=0
 REQUESTED_MODEL="opus"     # Configurable via --model flag, defaults to opus
 POORMAN_MODE=false         # Accept any model returned (no model verification)
 
+# Retry configuration (exponential backoff) - normal mode only
+MAX_RETRIES=10              # Maximum number of retry attempts
+INITIAL_RETRY_DELAY=5       # Starting delay in seconds
+MAX_RETRY_DELAY=600         # Maximum delay cap in seconds (10 minutes)
+
 # Timer/chronograph configuration
 TIMER_PID=""
 TIMER_START_TIME=0
@@ -109,6 +114,50 @@ stop_timer() {
     fi
 
     # Clear the timer line using ANSI escape sequence
+    printf "\r\033[K"
+}
+
+# Calculate exponential backoff delay with cap
+# Parameters: retry_attempt (0-based: 0, 1, 2, ...)
+# Returns: delay in seconds (5, 10, 20, 40, 80, 160, 320, 600, 600, ...)
+calculate_backoff_delay() {
+    local attempt=$1
+    local delay=$INITIAL_RETRY_DELAY
+
+    # Double the delay for each retry attempt
+    for ((i=0; i<attempt; i++)); do
+        delay=$((delay * 2))
+        if [ $delay -gt $MAX_RETRY_DELAY ]; then
+            delay=$MAX_RETRY_DELAY
+            break
+        fi
+    done
+
+    echo $delay
+}
+
+# Display countdown timer during retry backoff period
+# Parameters: delay_seconds
+wait_with_countdown() {
+    local total_delay=$1
+    local remaining=$total_delay
+
+    while [ $remaining -gt 0 ]; do
+        local mins=$((remaining / 60))
+        local secs=$((remaining % 60))
+
+        # Animate spinner during countdown
+        local spinner_idx=$((total_delay - remaining))
+        local spinner_len=${#SPINNER_CHARS}
+        local char="${SPINNER_CHARS:$((spinner_idx % spinner_len)):1}"
+
+        printf "\r${CYAN}%s${NC} Waiting... %02d:%02d remaining" "$char" "$mins" "$secs"
+
+        sleep 1
+        remaining=$((remaining - 1))
+    done
+
+    # Clear the countdown line
     printf "\r\033[K"
 }
 
@@ -658,10 +707,21 @@ If, while working on the task, you determine ALL tasks are complete, output exac
         [[ -z "$ACTUAL_MODEL" ]] && ACTUAL_MODEL="unknown"
         echo "✓ $ACTUAL_MODEL (poorman mode - any model accepted)"
     else
-        # Normal mode: try requested model once, fail if wrong model returned
-        echo "Requesting $REQUESTED_MODEL..."
-        start_timer
-        claude_json=$(claude --output-format json --model "$REQUESTED_MODEL" --permission-mode bypassPermissions -p "Find the highest-priority task from the TODO file and work only on that task.
+        # Normal mode: retry with exponential backoff if wrong model returned
+        RETRY_ATTEMPT=0
+        MODEL_OBTAINED=false
+
+        while [ $RETRY_ATTEMPT -le $MAX_RETRIES ]; do
+            # Show attempt number
+            if [ $RETRY_ATTEMPT -eq 0 ]; then
+                echo "Requesting $REQUESTED_MODEL..."
+            else
+                echo "Requesting $REQUESTED_MODEL (attempt $((RETRY_ATTEMPT + 1))/$((MAX_RETRIES + 1)))..."
+            fi
+
+            # Make API call with timer
+            start_timer
+            claude_json=$(claude --output-format json --model "$REQUESTED_MODEL" --permission-mode bypassPermissions -p "Find the highest-priority task from the TODO file and work only on that task.
 
 Here are the current TODO items and progress:
 
@@ -683,18 +743,50 @@ IMPORTANT: Only work on a SINGLE task per iteration.
 
 If, while working on the task, you determine ALL tasks are complete, output exactly this:
 <promise>COMPLETE</promise>" 2>/dev/null) || CLAUDE_EXIT_CODE=$?
-        stop_timer
+            stop_timer
 
-        # Extract actual model used
-        ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | to_entries | max_by(.value.inputTokens + .value.outputTokens) | .key // "unknown"' 2>/dev/null)
-        [[ -z "$ACTUAL_MODEL" ]] && ACTUAL_MODEL="unknown"
+            # Check for API errors (fail fast - no retry)
+            if [ $CLAUDE_EXIT_CODE -ne 0 ]; then
+                log_error "API call failed with exit code $CLAUDE_EXIT_CODE"
+                log_error "Not retrying on API errors"
+                exit 1
+            fi
 
-        # Check if requested model matches actual model (case-insensitive)
-        if echo "$ACTUAL_MODEL" | grep -qi "$REQUESTED_MODEL"; then
-            echo "✓ $REQUESTED_MODEL"
-        else
-            log_error "Requested $REQUESTED_MODEL but got $ACTUAL_MODEL"
-            log_error "Model unavailable, failing iteration"
+            # Validate JSON (fail fast - no retry)
+            if ! echo "$claude_json" | jq empty 2>/dev/null; then
+                log_error "Invalid JSON response"
+                exit 1
+            fi
+
+            # Extract and check model
+            ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | to_entries | max_by(.value.inputTokens + .value.outputTokens) | .key // "unknown"' 2>/dev/null)
+            [[ -z "$ACTUAL_MODEL" ]] && ACTUAL_MODEL="unknown"
+
+            if echo "$ACTUAL_MODEL" | grep -qi "$REQUESTED_MODEL"; then
+                # Success! Got the right model
+                echo "✓ $REQUESTED_MODEL"
+                MODEL_OBTAINED=true
+                break
+            else
+                # Wrong model - retry with backoff
+                if [ $RETRY_ATTEMPT -lt $MAX_RETRIES ]; then
+                    BACKOFF_DELAY=$(calculate_backoff_delay $RETRY_ATTEMPT)
+                    log_warn "Got $ACTUAL_MODEL instead of $REQUESTED_MODEL"
+                    log_info "Retrying in ${BACKOFF_DELAY}s (attempt $((RETRY_ATTEMPT + 1))/$MAX_RETRIES)"
+                    wait_with_countdown $BACKOFF_DELAY
+                    RETRY_ATTEMPT=$((RETRY_ATTEMPT + 1))
+                else
+                    # Exhausted all retries
+                    log_error "Requested $REQUESTED_MODEL but got $ACTUAL_MODEL"
+                    log_error "Exhausted all $MAX_RETRIES retry attempts"
+                    exit 1
+                fi
+            fi
+        done
+
+        # Safety check
+        if [ "$MODEL_OBTAINED" = false ]; then
+            log_error "Retry loop exited without obtaining model"
             exit 1
         fi
     fi
