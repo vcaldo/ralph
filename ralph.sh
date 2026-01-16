@@ -42,14 +42,6 @@ CLAUDE_EXIT_CODE=0
 REQUESTED_MODEL="opus"     # Configurable via --model flag, defaults to opus
 POORMAN_MODE=false         # Accept any model returned (no model verification)
 
-# Model pricing (per million tokens) - easy to update when prices change
-HAIKU_INPUT_PRICE=0.80
-HAIKU_OUTPUT_PRICE=4.00
-SONNET_INPUT_PRICE=3.00
-SONNET_OUTPUT_PRICE=12.00
-OPUS_INPUT_PRICE=15.00
-OPUS_OUTPUT_PRICE=45.00
-
 # Timer/chronograph configuration
 TIMER_PID=""
 TIMER_START_TIME=0
@@ -293,93 +285,6 @@ on_interrupt() {
 trap 'on_interrupt' SIGINT SIGTERM
 
 # =============================================================================
-# PRICING FUNCTIONS
-# =============================================================================
-
-# Get pricing for a Claude model
-# Returns: "input_price output_price" (per million tokens)
-get_model_pricing() {
-    local model="$1"
-
-    # Determine model tier from model name
-    if [[ "$model" =~ haiku ]]; then
-        echo "$HAIKU_INPUT_PRICE $HAIKU_OUTPUT_PRICE"
-    elif [[ "$model" =~ sonnet ]]; then
-        echo "$SONNET_INPUT_PRICE $SONNET_OUTPUT_PRICE"
-    elif [[ "$model" =~ opus ]]; then
-        echo "$OPUS_INPUT_PRICE $OPUS_OUTPUT_PRICE"
-    else
-        # Default to Haiku if model tier can't be determined
-        echo "$HAIKU_INPUT_PRICE $HAIKU_OUTPUT_PRICE"
-    fi
-}
-
-# Get all unique models used in this session from metrics log
-get_session_models() {
-    if [[ ! -f "$METRICS_LOG" ]]; then
-        echo "unknown"
-        return
-    fi
-
-    # Get all unique models from metrics log and join with comma
-    jq -r '.model // "unknown"' "$METRICS_LOG" 2>/dev/null | sort -u | tr '\n' ',' | sed 's/,$//'
-}
-
-# Calculate accurate cost from metrics log by summing per-iteration costs
-# Returns: "input_cost output_cost total_cost" with proper formatting
-calculate_accurate_cost() {
-    if [[ ! -f "$METRICS_LOG" ]]; then
-        echo "0.000 0.000 0.000"
-        return
-    fi
-
-    # Use jq to iterate through each iteration in metrics log and sum costs per model
-    local result=$(jq -r \
-        --arg haiku_in "$HAIKU_INPUT_PRICE" \
-        --arg haiku_out "$HAIKU_OUTPUT_PRICE" \
-        --arg sonnet_in "$SONNET_INPUT_PRICE" \
-        --arg sonnet_out "$SONNET_OUTPUT_PRICE" \
-        --arg opus_in "$OPUS_INPUT_PRICE" \
-        --arg opus_out "$OPUS_OUTPUT_PRICE" \
-        'def get_tier:
-            if . | test("haiku"; "i") then "haiku"
-            elif . | test("sonnet"; "i") then "sonnet"
-            elif . | test("opus"; "i") then "opus"
-            else "haiku" end;
-
-        def get_prices:
-            if . == "haiku" then {input: ($haiku_in | tonumber), output: ($haiku_out | tonumber)}
-            elif . == "sonnet" then {input: ($sonnet_in | tonumber), output: ($sonnet_out | tonumber)}
-            elif . == "opus" then {input: ($opus_in | tonumber), output: ($opus_out | tonumber)}
-            else {input: ($haiku_in | tonumber), output: ($haiku_out | tonumber)} end;
-
-        # Calculate cost per iteration
-        map(
-            (.model | get_tier) as $tier |
-            ((.usage.input_tokens / 1000000) * ($tier | get_prices | .input)) as $input_cost |
-            ((.usage.output_tokens / 1000000) * ($tier | get_prices | .output)) as $output_cost |
-            {
-                tier: $tier,
-                input_cost: $input_cost,
-                output_cost: $output_cost
-            }
-        )
-        | {
-            total_input: (map(.input_cost) | add // 0),
-            total_output: (map(.output_cost) | add // 0)
-        }
-        | .total_cost = (.total_input + .total_output)
-        | "\(.total_input | @text) \(.total_output | @text) \(.total_cost | @text)"
-        ' "$METRICS_LOG" 2>/dev/null)
-
-    if [[ -z "$result" ]]; then
-        echo "0.000 0.000 0.000"
-    else
-        echo "$result"
-    fi
-}
-
-# =============================================================================
 # METRICS FUNCTIONS
 # =============================================================================
 
@@ -541,22 +446,6 @@ print_final_summary() {
     # Format total duration
     local total_duration_str=$(format_duration "$TOTAL_DURATION")
 
-    # Get all models used in session
-    local session_models=$(get_session_models)
-
-    # Check if multiple models were used
-    if [[ "$session_models" == *","* ]]; then
-        log_warn "Multiple models detected in session: $session_models"
-    fi
-
-    # Calculate accurate cost from per-iteration model usage in metrics log
-    read -r input_cost output_cost total_cost <<< $(calculate_accurate_cost)
-
-    # Format costs with consistent precision
-    input_cost=$(printf "%.3f" "$input_cost")
-    output_cost=$(printf "%.3f" "$output_cost")
-    total_cost=$(printf "%.3f" "$total_cost")
-
     echo "Iterations:"
     echo "  Completed:       $INTERACTION_COUNT / $ITERATIONS"
     echo "  Success Rate:    ${success_rate}%"
@@ -583,19 +472,6 @@ print_final_summary() {
     if [[ $INTERACTION_COUNT -gt 0 ]]; then
         echo "  Average:         $((TOTAL_FILES_CHANGED / INTERACTION_COUNT)) files per iteration"
     fi
-    echo ""
-    echo "Models Used:"
-    echo "  $session_models"
-    echo ""
-    # Display cost estimate with appropriate indicator for model accuracy
-    if [[ "$session_models" == *","* ]]; then
-        echo "Cost Estimate (accurate, mixed models: $session_models):"
-    else
-        echo "Cost Estimate (based on $session_models):"
-    fi
-    echo "  Input tokens:    \$$input_cost"
-    echo "  Output tokens:   \$$output_cost"
-    echo "  Total:           \$$total_cost"
     echo ""
     log_info "Metrics log saved to: $METRICS_LOG"
     echo ""
