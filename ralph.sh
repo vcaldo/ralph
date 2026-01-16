@@ -8,14 +8,30 @@ set -euo pipefail
 # CONFIGURATION
 # =============================================================================
 
+# --- Constants (immutable) ---
 # Color codes for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly CYAN='\033[0;36m'
+readonly NC='\033[0m' # No Color
 
+# Spinner characters for progress display
+readonly SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+
+# --- Configuration (set once via CLI flags or defaults) ---
+# Model configuration
+REQUESTED_MODEL="opus"     # Configurable via --model flag, defaults to opus
+POORMAN_MODE=false         # Accept any model returned (no model verification)
+
+# Retry configuration (exponential backoff) - normal mode only
+# These can be overridden via --max-retries, --initial-delay, --max-delay flags
+MAX_RETRIES=10              # Maximum number of retry attempts
+INITIAL_RETRY_DELAY=5       # Starting delay in seconds
+MAX_RETRY_DELAY=600         # Maximum delay cap in seconds (10 minutes)
+
+# --- Global state (modified during execution) ---
 # Metrics tracking variables (METRICS_LOG set after PLAN_DIR is validated)
 METRICS_LOG=""
 TOTAL_DURATION=0
@@ -24,7 +40,12 @@ TOTAL_OUTPUT_TOKENS=0
 TOTAL_FILES_CHANGED=0
 INTERACTION_COUNT=0
 
-# Per-iteration metrics
+# Timer/chronograph state
+TIMER_PID=""
+TIMER_START_TIME=0
+
+# --- Per-iteration state (reset each loop) ---
+# These are set fresh for each iteration
 ITERATION_DURATION=0
 ITERATION_START=0
 ITERATION_MODEL="unknown"
@@ -37,20 +58,6 @@ ITERATION_TOTAL_TOKENS=0
 ITERATION_FILES_CHANGED=0
 ITERATION_SUCCESS="true"
 CLAUDE_EXIT_CODE=0
-
-# Model configuration
-REQUESTED_MODEL="opus"     # Configurable via --model flag, defaults to opus
-POORMAN_MODE=false         # Accept any model returned (no model verification)
-
-# Retry configuration (exponential backoff) - normal mode only
-MAX_RETRIES=10              # Maximum number of retry attempts
-INITIAL_RETRY_DELAY=5       # Starting delay in seconds
-MAX_RETRY_DELAY=600         # Maximum delay cap in seconds (10 minutes)
-
-# Timer/chronograph configuration
-TIMER_PID=""
-TIMER_START_TIME=0
-SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 
 # =============================================================================
 # FUNCTIONS
@@ -107,9 +114,11 @@ start_timer() {
 # Stop the timer and clean up the display line
 stop_timer() {
     if [[ -n "$TIMER_PID" ]]; then
-        # Kill the background timer process
-        kill "$TIMER_PID" 2>/dev/null || true
-        wait "$TIMER_PID" 2>/dev/null || true
+        # Check if process exists before waiting (prevents race condition)
+        if kill -0 "$TIMER_PID" 2>/dev/null; then
+            kill "$TIMER_PID" 2>/dev/null || true
+            wait "$TIMER_PID" 2>/dev/null || true
+        fi
         TIMER_PID=""
     fi
 
@@ -120,6 +129,8 @@ stop_timer() {
 # Calculate exponential backoff delay with cap
 # Parameters: retry_attempt (0-based: 0, 1, 2, ...)
 # Returns: delay in seconds (5, 10, 20, 40, 80, 160, 320, 600, 600, ...)
+# Note: Safe for MAX_RETRIES up to ~20 before integer overflow concerns
+# Current MAX_RETRIES=10 is well within safe range
 calculate_backoff_delay() {
     local attempt=$1
     local delay=$INITIAL_RETRY_DELAY
@@ -307,6 +318,34 @@ commit_changes() {
     fi
 }
 
+# Call Claude API with the standard prompt
+# Sets globals: claude_json, CLAUDE_EXIT_CODE
+# Uses globals: REQUESTED_MODEL, TODO_FILE, PROGRESS_FILE
+call_claude_api() {
+    claude_json=$(claude --output-format json --model "$REQUESTED_MODEL" --permission-mode bypassPermissions -p "Find the highest-priority task from the TODO file and work only on that task.
+
+Here are the current TODO items and progress:
+
+@$TODO_FILE
+
+@$PROGRESS_FILE
+
+Guidelines:
+1. Pick ONE task from the TODO file that you determine has the highest priority
+2. Work ONLY on that task - do not work on multiple tasks
+3. Update the TODO file by marking the task as complete (change [ ] to [x]) or updating its status
+4. After completing the task, append your progress to the progress file (@$PROGRESS_FILE) with this format:
+   - Current date/time
+   - Task name
+   - What was accomplished
+   - Next steps (if any)
+
+IMPORTANT: Only work on a SINGLE task per iteration.
+
+If, while working on the task, you determine ALL tasks are complete, output exactly this:
+<promise>COMPLETE</promise>" 2>/dev/null) || CLAUDE_EXIT_CODE=$?
+}
+
 # =============================================================================
 # SIGNAL HANDLING (Graceful Interrupt)
 # =============================================================================
@@ -341,6 +380,17 @@ trap 'on_interrupt' SIGINT SIGTERM
 # METRICS FUNCTIONS
 # =============================================================================
 
+# Extract model name from Claude JSON response
+# Parameters: $1 = JSON string
+# Returns: Model name via stdout (or "unknown" if extraction fails)
+extract_model_from_json() {
+    local json="$1"
+    local model
+    model=$(echo "$json" | jq -r '.modelUsage | to_entries | max_by(.value.inputTokens + .value.outputTokens) | .key // "unknown"' 2>/dev/null)
+    [[ -z "$model" ]] && model="unknown"
+    echo "$model"
+}
+
 extract_iteration_metrics() {
     local json="$1"
     local start_time="$2"
@@ -348,28 +398,30 @@ extract_iteration_metrics() {
     # Calculate duration
     ITERATION_DURATION=$((SECONDS - start_time))
 
-    # Validate JSON output
+    # Validate JSON output - fail fast on invalid JSON
     if ! echo "$json" | jq empty 2>/dev/null; then
-        log_warn "Invalid JSON response, using default metrics"
-        ITERATION_MODEL="unknown"
-        ITERATION_STOP_REASON="parse_error"
-        ITERATION_INPUT_TOKENS=0
-        ITERATION_OUTPUT_TOKENS=0
-        ITERATION_CACHE_CREATE_TOKENS=0
-        ITERATION_CACHE_READ_TOKENS=0
-        ITERATION_TOTAL_TOKENS=0
-        ITERATION_FILES_CHANGED=0
-        ITERATION_SUCCESS="false"
-        return 1
+        log_error "Invalid JSON response from Claude API"
+        log_error "Response (first 200 chars): ${json:0:200}..."
+        exit 1
     fi
 
-    # Extract metrics from JSON with defaults
-    ITERATION_MODEL=$(echo "$json" | jq -r '.modelUsage | to_entries | max_by(.value.inputTokens + .value.outputTokens) | .key // "unknown"' 2>/dev/null || echo "unknown")
-    ITERATION_STOP_REASON=$(echo "$json" | jq -r '.type // "unknown"')
-    ITERATION_INPUT_TOKENS=$(echo "$json" | jq -r '.usage.input_tokens // 0')
-    ITERATION_OUTPUT_TOKENS=$(echo "$json" | jq -r '.usage.output_tokens // 0')
-    ITERATION_CACHE_CREATE_TOKENS=$(echo "$json" | jq -r '.usage.cache_creation_input_tokens // 0')
-    ITERATION_CACHE_READ_TOKENS=$(echo "$json" | jq -r '.usage.cache_read_input_tokens // 0')
+    # Extract metrics from JSON with defaults (single jq pass for efficiency)
+    local metrics_json
+    metrics_json=$(echo "$json" | jq -r '{
+        model: (.modelUsage | to_entries | max_by(.value.inputTokens + .value.outputTokens) | .key // "unknown"),
+        stop_reason: (.type // "unknown"),
+        input_tokens: (.usage.input_tokens // 0),
+        output_tokens: (.usage.output_tokens // 0),
+        cache_create_tokens: (.usage.cache_creation_input_tokens // 0),
+        cache_read_tokens: (.usage.cache_read_input_tokens // 0)
+    }' 2>/dev/null || echo '{"model":"unknown","stop_reason":"unknown","input_tokens":0,"output_tokens":0,"cache_create_tokens":0,"cache_read_tokens":0}')
+
+    ITERATION_MODEL=$(echo "$metrics_json" | jq -r '.model')
+    ITERATION_STOP_REASON=$(echo "$metrics_json" | jq -r '.stop_reason')
+    ITERATION_INPUT_TOKENS=$(echo "$metrics_json" | jq -r '.input_tokens')
+    ITERATION_OUTPUT_TOKENS=$(echo "$metrics_json" | jq -r '.output_tokens')
+    ITERATION_CACHE_CREATE_TOKENS=$(echo "$metrics_json" | jq -r '.cache_create_tokens')
+    ITERATION_CACHE_READ_TOKENS=$(echo "$metrics_json" | jq -r '.cache_read_tokens')
     ITERATION_TOTAL_TOKENS=$((ITERATION_INPUT_TOKENS + ITERATION_OUTPUT_TOKENS))
 
     # Calculate files changed (count modified files in git)
@@ -464,8 +516,23 @@ print_final_summary() {
     echo "=================================================="
     echo ""
 
+    # Calculate all aggregate metrics in a single jq pass for efficiency
+    local aggregates
+    aggregates=$(jq -s '{
+        success_count: ([.[] | select(.success == true)] | length),
+        min_duration: (map(.duration_seconds) | min // 0),
+        max_duration: (map(.duration_seconds) | max // 0),
+        total_cache_create: (map(.usage.cache_creation_tokens) | add // 0),
+        total_cache_read: (map(.usage.cache_read_tokens) | add // 0)
+    }' "$METRICS_LOG" 2>/dev/null || echo '{"success_count":0,"min_duration":0,"max_duration":0,"total_cache_create":0,"total_cache_read":0}')
+
+    local success_count=$(echo "$aggregates" | jq -r '.success_count')
+    local min_duration=$(echo "$aggregates" | jq -r '.min_duration')
+    local max_duration=$(echo "$aggregates" | jq -r '.max_duration')
+    local total_cache_create=$(echo "$aggregates" | jq -r '.total_cache_create')
+    local total_cache_read=$(echo "$aggregates" | jq -r '.total_cache_read')
+
     # Calculate success rate
-    local success_count=$(jq -s '[.[] | select(.success == true)] | length' "$METRICS_LOG" 2>/dev/null || echo "0")
     local success_rate=0
     if [[ $INTERACTION_COUNT -gt 0 ]]; then
         success_rate=$(( (success_count * 100) / INTERACTION_COUNT ))
@@ -479,19 +546,11 @@ print_final_summary() {
         avg_duration_str=$(format_duration "$avg_duration")
     fi
 
-    # Calculate min/max duration from JSONL
-    local min_duration=$(jq -s 'map(.duration_seconds) | min' "$METRICS_LOG" 2>/dev/null || echo "0")
-    local max_duration=$(jq -s 'map(.duration_seconds) | max' "$METRICS_LOG" 2>/dev/null || echo "0")
-
     # Calculate average tokens
     local avg_tokens=0
     if [[ $INTERACTION_COUNT -gt 0 ]]; then
         avg_tokens=$(( (TOTAL_INPUT_TOKENS + TOTAL_OUTPUT_TOKENS) / INTERACTION_COUNT ))
     fi
-
-    # Calculate total cache tokens
-    local total_cache_create=$(jq -s 'map(.usage.cache_creation_tokens) | add' "$METRICS_LOG" 2>/dev/null || echo "0")
-    local total_cache_read=$(jq -s 'map(.usage.cache_read_tokens) | add' "$METRICS_LOG" 2>/dev/null || echo "0")
 
     # Calculate overall cache hit rate
     local cache_hit_rate=$(calculate_cache_hit_rate "$total_cache_read" "$TOTAL_INPUT_TOKENS")
@@ -561,6 +620,42 @@ while [[ "${1:-}" == --* ]]; do
             POORMAN_MODE=true
             shift
             ;;
+        --max-retries)
+            if [[ -z "${2:-}" ]] || [[ "${2:-}" == --* ]]; then
+                log_error "--max-retries requires a positive integer argument"
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+                log_error "--max-retries must be a positive integer, got: $2"
+                exit 1
+            fi
+            MAX_RETRIES="$2"
+            shift 2
+            ;;
+        --initial-delay)
+            if [[ -z "${2:-}" ]] || [[ "${2:-}" == --* ]]; then
+                log_error "--initial-delay requires a positive integer argument (seconds)"
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+                log_error "--initial-delay must be a positive integer, got: $2"
+                exit 1
+            fi
+            INITIAL_RETRY_DELAY="$2"
+            shift 2
+            ;;
+        --max-delay)
+            if [[ -z "${2:-}" ]] || [[ "${2:-}" == --* ]]; then
+                log_error "--max-delay requires a positive integer argument (seconds)"
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+                log_error "--max-delay must be a positive integer, got: $2"
+                exit 1
+            fi
+            MAX_RETRY_DELAY="$2"
+            shift 2
+            ;;
         *)
             log_error "Unknown option: $1"
             exit 1
@@ -569,21 +664,25 @@ while [[ "${1:-}" == --* ]]; do
 done
 
 if [ -z "${1:-}" ]; then
-    log_error "Usage: $0 [--model <haiku|sonnet|opus>] [--poorman] <plan-dir> [iterations]"
+    log_error "Usage: $0 [options] <plan-dir> [iterations]"
     echo ""
     echo "Options:"
-    echo "  --model MODEL   Specify which model to use (haiku, sonnet, or opus). Default: opus"
-    echo "  --poorman       Accept any model returned (no model verification)"
+    echo "  --model MODEL          Specify which model to use (haiku, sonnet, or opus). Default: opus"
+    echo "  --poorman              Accept any model returned (no model verification)"
+    echo "  --max-retries N        Maximum retry attempts when wrong model returned. Default: 10"
+    echo "  --initial-delay N      Initial retry delay in seconds. Default: 5"
+    echo "  --max-delay N          Maximum retry delay cap in seconds. Default: 600"
     echo ""
     echo "Arguments:"
-    echo "  plan-dir        Directory containing the plan (must have TODO.md)"
-    echo "  iterations      (optional) Maximum number of iterations to run. If omitted, runs until completion."
+    echo "  plan-dir               Directory containing the plan (must have TODO.md)"
+    echo "  iterations             (optional) Maximum number of iterations to run. If omitted, runs until completion."
     echo ""
     echo "Examples:"
     echo "  $0 plans/arena-v2/                          # Run until complete (unlimited)"
     echo "  $0 plans/arena-v2/ 10                       # Run max 10 iterations using opus"
     echo "  $0 --model sonnet plans/arena-v2/           # Run until complete using sonnet"
     echo "  $0 --model sonnet --poorman plans/arena-v2/ 10  # Run with sonnet, accept any model"
+    echo "  $0 --max-retries 5 --max-delay 300 plans/arena-v2/  # Custom retry configuration"
     exit 1
 fi
 
@@ -657,14 +756,15 @@ echo ""
 # FILE SETUP
 # =============================================================================
 
-# Create progress file if it doesn't exist
-if [ ! -f "$PROGRESS_FILE" ]; then
-    log_info "Creating progress file at $PROGRESS_FILE"
+# Verify we can write to progress file
+if ! touch "$PROGRESS_FILE" 2>/dev/null; then
+    log_error "Cannot write to progress file: $PROGRESS_FILE"
+    exit 1
 fi
 
-# Verify we can write to both progress and metrics files
-if ! touch "$PROGRESS_FILE" "$METRICS_LOG" 2>/dev/null; then
-    log_error "Cannot write to progress file or metrics file"
+# Verify we can write to metrics file
+if ! touch "$METRICS_LOG" 2>/dev/null; then
+    log_error "Cannot write to metrics file: $METRICS_LOG"
     exit 1
 fi
 
@@ -698,41 +798,15 @@ while true; do
     # Use --output-format json to capture metrics
     # Separate stdout (JSON) from stderr to avoid corrupting JSON with error messages
 
-    # Extract current task from TODO file (first unchecked item)
-    # Format: "- [ ] Task description" -> "Task description"
-    CURRENT_TASK=$(grep -m 1 '^\s*- \[ \]' "$TODO_FILE" | sed 's/^\s*- \[ \] //')
-
     claude_json=""
     CLAUDE_EXIT_CODE=0
 
     if [ "$POORMAN_MODE" = true ]; then
         # Poorman mode: try requested model once, accept any model
         start_timer
-        claude_json=$(claude --output-format json --model "$REQUESTED_MODEL" --permission-mode bypassPermissions -p "Find the highest-priority task from the TODO file and work only on that task.
-
-Here are the current TODO items and progress:
-
-@$TODO_FILE
-
-@$PROGRESS_FILE
-
-Guidelines:
-1. Pick ONE task from the TODO file that you determine has the highest priority
-2. Work ONLY on that task - do not work on multiple tasks
-3. Update the TODO file by marking the task as complete (change [ ] to [x]) or updating its status
-4. After completing the task, append your progress to the progress file (@$PROGRESS_FILE) with this format:
-   - Current date/time
-   - Task name
-   - What was accomplished
-   - Next steps (if any)
-
-IMPORTANT: Only work on a SINGLE task per iteration.
-
-If, while working on the task, you determine ALL tasks are complete, output exactly this:
-<promise>COMPLETE</promise>" 2>/dev/null) || CLAUDE_EXIT_CODE=$?
+        call_claude_api
         stop_timer
-        ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | to_entries | max_by(.value.inputTokens + .value.outputTokens) | .key // "unknown"' 2>/dev/null)
-        [[ -z "$ACTUAL_MODEL" ]] && ACTUAL_MODEL="unknown"
+        ACTUAL_MODEL=$(extract_model_from_json "$claude_json")
         echo "✓ $ACTUAL_MODEL (poorman mode - any model accepted)"
     else
         # Normal mode: retry with exponential backoff if wrong model returned
@@ -749,28 +823,7 @@ If, while working on the task, you determine ALL tasks are complete, output exac
 
             # Make API call with timer
             start_timer
-            claude_json=$(claude --output-format json --model "$REQUESTED_MODEL" --permission-mode bypassPermissions -p "Find the highest-priority task from the TODO file and work only on that task.
-
-Here are the current TODO items and progress:
-
-@$TODO_FILE
-
-@$PROGRESS_FILE
-
-Guidelines:
-1. Pick ONE task from the TODO file that you determine has the highest priority
-2. Work ONLY on that task - do not work on multiple tasks
-3. Update the TODO file by marking the task as complete (change [ ] to [x]) or updating its status
-4. After completing the task, append your progress to the progress file (@$PROGRESS_FILE) with this format:
-   - Current date/time
-   - Task name
-   - What was accomplished
-   - Next steps (if any)
-
-IMPORTANT: Only work on a SINGLE task per iteration.
-
-If, while working on the task, you determine ALL tasks are complete, output exactly this:
-<promise>COMPLETE</promise>" 2>/dev/null) || CLAUDE_EXIT_CODE=$?
+            call_claude_api
             stop_timer
 
             # Check for API errors (fail fast - no retry)
@@ -787,8 +840,7 @@ If, while working on the task, you determine ALL tasks are complete, output exac
             fi
 
             # Extract and check model
-            ACTUAL_MODEL=$(echo "$claude_json" | jq -r '.modelUsage | to_entries | max_by(.value.inputTokens + .value.outputTokens) | .key // "unknown"' 2>/dev/null)
-            [[ -z "$ACTUAL_MODEL" ]] && ACTUAL_MODEL="unknown"
+            ACTUAL_MODEL=$(extract_model_from_json "$claude_json")
 
             if echo "$ACTUAL_MODEL" | grep -qi "$REQUESTED_MODEL"; then
                 # Success! Got the right model
@@ -811,12 +863,6 @@ If, while working on the task, you determine ALL tasks are complete, output exac
                 fi
             fi
         done
-
-        # Safety check
-        if [ "$MODEL_OBTAINED" = false ]; then
-            log_error "Retry loop exited without obtaining model"
-            exit 1
-        fi
     fi
 
     # Extract text content from JSON for completion check and display
@@ -827,6 +873,16 @@ If, while working on the task, you determine ALL tasks are complete, output exac
 
     # Auto-commit changes if files were modified
     if [ "$ITERATION_FILES_CHANGED" -gt 0 ]; then
+        # Extract current task from TODO file for commit message (first unchecked item)
+        # Format: "- [ ] Task description" -> "Task description"
+        CURRENT_TASK=$(grep -m 1 '^\s*- \[ \]' "$TODO_FILE" | sed 's/^\s*- \[ \] //')
+
+        # Validate task name is not empty (could happen if no unchecked tasks exist)
+        if [[ -z "$CURRENT_TASK" ]]; then
+            log_warn "No unchecked tasks found in TODO file"
+            CURRENT_TASK="Ralph iteration $ITERATION_COUNT"
+        fi
+
         commit_changes "$CURRENT_TASK"
     fi
 
