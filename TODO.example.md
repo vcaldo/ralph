@@ -31,6 +31,7 @@ Ralph will:
 3. Work on ONLY that task
 4. Update this file when task is complete (mark with [x])
 5. Append progress to progress.txt
+6. Continue until all tasks complete (unless iteration limit specified)
 
 **IMPORTANT SAFETY RULES:**
 - ❌ **DO NOT** deploy to production

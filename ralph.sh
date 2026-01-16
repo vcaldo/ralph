@@ -324,7 +324,11 @@ on_interrupt() {
     print_final_summary
 
     log_info "Progress file: $PROGRESS_FILE"
-    log_info "To continue, run: $0 $PLAN_DIR $ITERATIONS"
+    if [ "$INFINITE_MODE" = true ]; then
+        log_info "To continue, run: $0 $PLAN_DIR"
+    else
+        log_info "To continue, run: $0 $PLAN_DIR $ITERATIONS"
+    fi
 
     # Exit with standard signal code for SIGINT
     exit 130
@@ -496,7 +500,11 @@ print_final_summary() {
     local total_duration_str=$(format_duration "$TOTAL_DURATION")
 
     echo "Iterations:"
-    echo "  Completed:       $INTERACTION_COUNT / $ITERATIONS"
+    if [ "$INFINITE_MODE" = true ]; then
+        echo "  Completed:       $INTERACTION_COUNT (unlimited mode)"
+    else
+        echo "  Completed:       $INTERACTION_COUNT / $ITERATIONS"
+    fi
     echo "  Success Rate:    ${success_rate}%"
     echo ""
     echo "Duration:"
@@ -560,8 +568,8 @@ while [[ "${1:-}" == --* ]]; do
     esac
 done
 
-if [ -z "${1:-}" ] || [ -z "${2:-}" ]; then
-    log_error "Usage: $0 [--model <haiku|sonnet|opus>] [--poorman] <plan-dir> <iterations>"
+if [ -z "${1:-}" ]; then
+    log_error "Usage: $0 [--model <haiku|sonnet|opus>] [--poorman] <plan-dir> [iterations]"
     echo ""
     echo "Options:"
     echo "  --model MODEL   Specify which model to use (haiku, sonnet, or opus). Default: opus"
@@ -569,17 +577,19 @@ if [ -z "${1:-}" ] || [ -z "${2:-}" ]; then
     echo ""
     echo "Arguments:"
     echo "  plan-dir        Directory containing the plan (must have TODO.md)"
-    echo "  iterations      Maximum number of iterations to run"
+    echo "  iterations      (optional) Maximum number of iterations to run. If omitted, runs until completion."
     echo ""
     echo "Examples:"
-    echo "  $0 plans/arena-v2/ 10                        # Run 10 iterations using opus"
-    echo "  $0 --model sonnet plans/arena-v2/ 10        # Run using sonnet"
+    echo "  $0 plans/arena-v2/                          # Run until complete (unlimited)"
+    echo "  $0 plans/arena-v2/ 10                       # Run max 10 iterations using opus"
+    echo "  $0 --model sonnet plans/arena-v2/           # Run until complete using sonnet"
     echo "  $0 --model sonnet --poorman plans/arena-v2/ 10  # Run with sonnet, accept any model"
     exit 1
 fi
 
 PLAN_DIR="${1%/}"  # Remove trailing slash if present
-ITERATIONS=$2
+ITERATIONS=${2:-}
+INFINITE_MODE=false
 
 # Validate plan directory exists
 if [ ! -d "$PLAN_DIR" ]; then
@@ -598,20 +608,26 @@ TODO_FILE="$PLAN_DIR/TODO.md"
 PROGRESS_FILE="$PLAN_DIR/progress.txt"
 METRICS_LOG="$PLAN_DIR/ralph_metrics.jsonl"
 
-# Validate iterations is a number
-if ! [[ "$ITERATIONS" =~ ^[0-9]+$ ]]; then
-    log_error "Iterations must be a positive integer, got: $ITERATIONS"
-    exit 1
-fi
-
-if [ "$ITERATIONS" -eq 0 ]; then
-    log_error "Iterations must be greater than 0"
-    exit 1
+# Validate and configure iteration mode
+if [ -z "$ITERATIONS" ]; then
+    # No iterations specified - run in infinite mode
+    INFINITE_MODE=true
+    ITERATIONS=0  # Set to 0 for consistency in conditionals
+else
+    # Iterations specified - validate it's a positive integer
+    if ! [[ "$ITERATIONS" =~ ^[0-9]+$ ]] || [ "$ITERATIONS" -eq 0 ]; then
+        log_error "Iterations must be a positive integer (or omit for unlimited), got: $ITERATIONS"
+        exit 1
+    fi
 fi
 
 log_info "Ralph Automation Script"
 log_info "Plan directory: $PLAN_DIR"
-log_info "Iterations: $ITERATIONS"
+if [ "$INFINITE_MODE" = true ]; then
+    log_info "Iterations: unlimited (until completion)"
+else
+    log_info "Iterations: $ITERATIONS"
+fi
 log_info "Model: $REQUESTED_MODEL"
 log_info "TODO file: $TODO_FILE"
 log_info "Progress file: $PROGRESS_FILE"
@@ -656,9 +672,21 @@ fi
 # MAIN LOOP
 # =============================================================================
 
-for ((i=1; i<=ITERATIONS; i++)); do
+ITERATION_COUNT=0
+while true; do
+    ITERATION_COUNT=$((ITERATION_COUNT + 1))
+
+    # Break if exceeded max iterations (finite mode only)
+    if [ "$INFINITE_MODE" = false ] && [ $ITERATION_COUNT -gt $ITERATIONS ]; then
+        break
+    fi
+
     echo "=================================================="
-    echo "Iteration $i"
+    if [ "$INFINITE_MODE" = true ]; then
+        echo "Iteration $ITERATION_COUNT (unlimited)"
+    else
+        echo "Iteration $ITERATION_COUNT / $ITERATIONS"
+    fi
     echo "=================================================="
     echo ""
 
@@ -822,7 +850,7 @@ If, while working on the task, you determine ALL tasks are complete, output exac
 
         # Send notification if tt is available
         if command -v tt &> /dev/null; then
-            tt notify "Ralph: All tasks complete after $i iterations"
+            tt notify "Ralph: All tasks complete after $ITERATION_COUNT iterations"
         fi
 
         exit 0
@@ -842,4 +870,8 @@ echo ""
 print_final_summary
 
 log_info "Progress file: $PROGRESS_FILE"
-log_info "To continue, run: $0 $PLAN_DIR $ITERATIONS"
+if [ "$INFINITE_MODE" = true ]; then
+    log_info "To continue, run: $0 $PLAN_DIR"
+else
+    log_info "To continue, run: $0 $PLAN_DIR $ITERATIONS"
+fi

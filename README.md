@@ -15,7 +15,9 @@ git config user.email
 
 # Create your first plan (TODO.example.md is a template in this repo)
 cp TODO.example.md plans/my-feature/TODO.md
-./ralph.sh plans/my-feature/ 999
+./ralph.sh plans/my-feature/          # Run until complete (unlimited)
+# OR
+./ralph.sh plans/my-feature/ 999      # Run max 999 iterations
 ```
 ---
 
@@ -69,6 +71,10 @@ breaking down the plan into small, actionable tasks organized by priority.
 Execute the automation script to let Claude work through your tasks:
 
 ```bash
+# Run until complete (unlimited)
+./ralph.sh plans/ip-cam-telegram-bot/
+
+# Or set a max iteration limit
 ./ralph.sh plans/ip-cam-telegram-bot/ 999
 ```
 
@@ -91,7 +97,7 @@ Ralph follows a simple loop:
 3. Works on **only that task**
 4. Marks the task complete and updates `progress.txt`
 5. Auto-commits changes to git
-6. Repeats until all tasks are complete or iterations exhausted
+6. Repeats until all tasks are complete or iterations exhausted (if iteration limit specified)
 
 ## Features
 
