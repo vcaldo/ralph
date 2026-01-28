@@ -345,14 +345,16 @@ extract_iteration_metrics() {
     local metrics_json
     metrics_json=$(echo "$json" | jq -r '{
         model: (.modelUsage | to_entries | max_by(.value.inputTokens + .value.outputTokens) | .key // "unknown"),
+        models: (.modelUsage | keys // ["unknown"]),
         stop_reason: (.type // "unknown"),
         input_tokens: (.usage.input_tokens // 0),
         output_tokens: (.usage.output_tokens // 0),
         cache_create_tokens: (.usage.cache_creation_input_tokens // 0),
         cache_read_tokens: (.usage.cache_read_input_tokens // 0)
-    }' 2>/dev/null || echo '{"model":"unknown","stop_reason":"unknown","input_tokens":0,"output_tokens":0,"cache_create_tokens":0,"cache_read_tokens":0}')
+    }' 2>/dev/null || echo '{"model":"unknown","models":["unknown"],"stop_reason":"unknown","input_tokens":0,"output_tokens":0,"cache_create_tokens":0,"cache_read_tokens":0}')
 
     ITERATION_MODEL=$(echo "$metrics_json" | jq -r '.model')
+    ITERATION_MODELS=$(echo "$metrics_json" | jq -c '.models')
     ITERATION_STOP_REASON=$(echo "$metrics_json" | jq -r '.stop_reason')
     ITERATION_INPUT_TOKENS=$(echo "$metrics_json" | jq -r '.input_tokens')
     ITERATION_OUTPUT_TOKENS=$(echo "$metrics_json" | jq -r '.output_tokens')
@@ -390,6 +392,7 @@ append_metrics_log() {
         --arg timestamp "$timestamp" \
         --arg duration "$ITERATION_DURATION" \
         --arg model "$ITERATION_MODEL" \
+        --argjson models "$ITERATION_MODELS" \
         --arg stop_reason "$ITERATION_STOP_REASON" \
         --arg input_tokens "$ITERATION_INPUT_TOKENS" \
         --arg output_tokens "$ITERATION_OUTPUT_TOKENS" \
@@ -404,6 +407,7 @@ append_metrics_log() {
             timestamp: $timestamp,
             duration_seconds: ($duration | tonumber),
             model: $model,
+            models: $models,
             stop_reason: $stop_reason,
             usage: {
                 input_tokens: ($input_tokens | tonumber),
@@ -431,10 +435,14 @@ print_metrics_summary() {
         status_icon="✗"
     fi
 
+    # Format models list for display
+    local models_display
+    models_display=$(echo "$ITERATION_MODELS" | jq -r 'join(", ")')
+
     # Print simple list format (no box borders)
     echo "--- Iteration Metrics ---"
     echo "Duration: $duration_str"
-    echo "Model: $ITERATION_MODEL"
+    echo "Models: $models_display"
     echo "Status: $ITERATION_STOP_REASON"
     echo "Input tokens: $ITERATION_INPUT_TOKENS"
     echo "Output tokens: $ITERATION_OUTPUT_TOKENS"

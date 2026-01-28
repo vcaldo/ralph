@@ -310,7 +310,7 @@ Ralph provides real-time visual feedback during execution.
 
 ### Color-Coded Output
 
-Ralph uses color-coded symbols for different message types (ralph.sh:59-73):
+Ralph uses color-coded symbols for different message types:
 
 - `✓` (green) - Success messages
 - `✗` (red) - Error messages
@@ -319,7 +319,7 @@ Ralph uses color-coded symbols for different message types (ralph.sh:59-73):
 
 ### Real-Time Timer
 
-During Claude API calls, Ralph displays an animated timer (ralph.sh:79-118):
+During Claude API calls, Ralph displays an animated timer:
 
 ```
 ⠋ Running... 02:15
@@ -331,11 +331,9 @@ Features:
 - Updates every second
 - Automatically clears when operation completes
 
-**Spinner characters:** `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` (ralph.sh:53)
-
 ### Iteration Header
 
-Each iteration displays a clear header (ralph.sh:684-690):
+Each iteration displays a clear header:
 
 **Infinite mode:**
 ```
@@ -378,7 +376,7 @@ Ralph is designed to be resumable. If interrupted:
 
 ### Completion Signal
 
-Claude signals task completion by outputting (ralph.sh:731, 772, 843):
+Claude signals task completion by outputting:
 
 ```xml
 <promise>COMPLETE</promise>
@@ -392,7 +390,7 @@ When Ralph detects this signal:
 
 ### Desktop Notifications
 
-If `tt` (terminal-tools) is installed, Ralph sends desktop notifications on completion (ralph.sh:852-854):
+If `tt` (terminal-tools) is installed, Ralph sends desktop notifications on completion:
 
 ```bash
 tt notify "Ralph: All tasks complete after 10 iterations"
