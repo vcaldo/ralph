@@ -17,8 +17,6 @@ ralph.sh [OPTIONS] <plan-dir> [iterations]
   - `sonnet` - Balanced model for general-purpose work
   - `opus` - Most capable model for complex tasks
 
-- `--poorman` - Enable poorman mode (accepts any model returned, no verification)
-
 ### Arguments
 
 - `plan-dir` (required) - Directory containing the plan
@@ -43,89 +41,9 @@ ralph.sh [OPTIONS] <plan-dir> [iterations]
 # Run until complete using sonnet
 ./ralph.sh --model sonnet plans/ml-dashboard/
 
-# Run 20 iterations with haiku in poorman mode
-./ralph.sh --model haiku --poorman plans/refactor/ 20
-
-# Combined options
-./ralph.sh --model sonnet --poorman plans/arena-v2/
+# Run 20 iterations with haiku
+./ralph.sh --model haiku plans/refactor/ 20
 ```
-
-## Operation Modes
-
-### Normal Mode (Default)
-
-In normal mode, Ralph enforces strict model verification with retry logic:
-
-- Requests the specified model (`--model` flag, default: opus)
-- Verifies the returned model matches the requested model
-- Retries with exponential backoff if wrong model received (up to 10 attempts)
-- Fails fast on API errors or invalid JSON responses
-- Ensures consistent model usage across all iterations
-
-**Use when:** You need guaranteed model consistency and quality (recommended for production work).
-
-**Retry behavior:** ralph.sh:738-820
-**Model verification:** ralph.sh:789-820
-
-### Poorman Mode
-
-In poorman mode (`--poorman` flag), Ralph accepts whatever model is returned:
-
-- Requests the specified model but accepts any model
-- Single attempt only - no retries for model mismatches
-- Still fails fast on API errors or invalid JSON
-- Useful when model availability is limited or cost is a concern
-
-**Use when:** Testing, development, or when any model will suffice.
-
-**Implementation:** ralph.sh:708-736
-
-## Retry & Backoff Strategy
-
-Ralph implements exponential backoff for model verification in normal mode.
-
-### Retry Configuration
-
-- **Maximum retries:** 10 attempts (ralph.sh:46)
-- **Initial delay:** 5 seconds (ralph.sh:47)
-- **Maximum delay:** 600 seconds / 10 minutes (ralph.sh:48)
-- **Strategy:** Exponential backoff with cap
-
-### Backoff Delays
-
-Retry delays double with each attempt until reaching the cap:
-
-| Attempt | Delay   |
-|---------|---------|
-| 1       | 5s      |
-| 2       | 10s     |
-| 3       | 20s     |
-| 4       | 40s     |
-| 5       | 80s     |
-| 6       | 160s    |
-| 7       | 320s    |
-| 8       | 600s    |
-| 9       | 600s    |
-| 10      | 600s    |
-
-**Implementation:** ralph.sh:122-137
-
-### Countdown Display
-
-During retry backoff, Ralph displays an animated countdown timer showing:
-- Spinner animation
-- Minutes and seconds remaining
-- Current retry attempt number
-
-**Implementation:** ralph.sh:140-162
-
-### Fail-Fast Scenarios
-
-Ralph immediately exits (no retries) on:
-
-1. **API errors** - Non-zero exit code from Claude CLI (ralph.sh:776-781)
-2. **Invalid JSON** - Malformed response that cannot be parsed (ralph.sh:784-787)
-3. **Exhausted retries** - All 10 retry attempts failed (ralph.sh:807-811)
 
 ## Metrics & Monitoring
 
@@ -135,29 +53,29 @@ Ralph tracks comprehensive metrics for each iteration and provides summary stati
 
 **Per-Iteration Metrics:**
 
-- **Duration** - Execution time in seconds (ralph.sh:349)
-- **Model** - Actual model used for the iteration (ralph.sh:367)
-- **Stop reason** - How Claude ended the interaction (ralph.sh:368)
+- **Duration** - Execution time in seconds
+- **Model** - Actual model used for the iteration
+- **Stop reason** - How Claude ended the interaction
 - **Token counts:**
-  - Input tokens (ralph.sh:369)
-  - Output tokens (ralph.sh:370)
-  - Cache creation tokens (ralph.sh:371)
-  - Cache read tokens (ralph.sh:372)
-  - Total tokens (input + output) (ralph.sh:373)
-- **Files changed** - Number of files modified in git (ralph.sh:376)
-- **Success status** - Boolean indicating success/failure (ralph.sh:379-382)
-- **Exit code** - Claude CLI exit code (ralph.sh:39)
+  - Input tokens
+  - Output tokens
+  - Cache creation tokens
+  - Cache read tokens
+  - Total tokens (input + output)
+- **Files changed** - Number of files modified in git
+- **Success status** - Boolean indicating success/failure
+- **Exit code** - Claude CLI exit code
 
 **Aggregate Metrics:**
 
-- Total duration across all iterations (ralph.sh:388)
-- Total input/output tokens (ralph.sh:389-390)
-- Total files changed (ralph.sh:391)
-- Iteration count (ralph.sh:392)
-- Success rate percentage (ralph.sh:468-472)
-- Average duration per iteration (ralph.sh:476-480)
-- Min/max iteration duration (ralph.sh:483-484)
-- Cache hit rate (ralph.sh:497)
+- Total duration across all iterations
+- Total input/output tokens
+- Total files changed
+- Iteration count
+- Success rate percentage
+- Average duration per iteration
+- Min/max iteration duration
+- Cache hit rate
 
 ### Output Files
 
@@ -169,13 +87,11 @@ All output files are created in the `<plan-dir>/` directory:
 | `progress.txt` | Text | Progress log appended by Claude after each iteration |
 | `ralph_metrics.jsonl` | JSONL | Detailed per-iteration metrics (one JSON object per line) |
 
-**File validation:** ralph.sh:600-604, 666-669
-
 ### JSONL Format
 
 The `ralph_metrics.jsonl` file contains one JSON object per line (JSONL format). Each line represents one iteration.
 
-**Schema (ralph.sh:395-431):**
+**Schema:**
 
 ```json
 {
@@ -225,11 +141,9 @@ Cache Hit Rate = (cache_read_tokens / input_tokens) × 100%
 - Displayed as "N/A" if no input tokens
 - Shown per-iteration and as overall aggregate
 
-**Implementation:** ralph.sh:237-250, 438, 497
-
 ### Iteration Metrics Display
 
-After each iteration, Ralph displays a summary (ralph.sh:433-458):
+After each iteration, Ralph displays a summary:
 
 ```
 --- Iteration Metrics ---
@@ -247,7 +161,7 @@ Success: ✓
 
 ### Final Summary Statistics
 
-When Ralph completes (or is interrupted), it displays comprehensive summary statistics (ralph.sh:460-535):
+When Ralph completes (or is interrupted), it displays comprehensive summary statistics:
 
 ```
 ==================================================
@@ -309,7 +223,7 @@ Ralph requires a git repository and performs several git-related operations.
 
 ### Pre-flight Checks
 
-Before starting, Ralph validates (ralph.sh:252-280):
+Before starting, Ralph validates:
 
 1. **Repository check** - Verifies you're in a git repository
 2. **Uncommitted changes warning** - Warns if working directory has uncommitted changes
@@ -323,7 +237,7 @@ Before starting, Ralph validates (ralph.sh:252-280):
 
 ### Git Identity Requirements
 
-Ralph requires git identity to be configured (ralph.sh:198-213):
+Ralph requires git identity to be configured:
 
 ```bash
 git config user.name
@@ -334,20 +248,20 @@ If either is missing, Ralph exits with installation instructions.
 
 ### Auto-commit Behavior
 
-After each iteration, Ralph automatically commits changes if files were modified (ralph.sh:828-831):
+After each iteration, Ralph automatically commits changes if files were modified:
 
-1. **Checks for changes** - Uses `git status --porcelain` (ralph.sh:289)
-2. **Stages all changes** - Runs `git add -A` (ralph.sh:295)
-3. **Creates commit** - Uses task description as commit message (ralph.sh:301)
+1. **Checks for changes** - Uses `git status --porcelain`
+2. **Stages all changes** - Runs `git add -A`
+3. **Creates commit** - Uses task description as commit message
 4. **Reports status** - Logs success or failure
 
-**Commit message format (ralph.sh:286, 830):**
+**Commit message format:**
 - Uses the current task description extracted from TODO.md
 - Format: First unchecked task from TODO file (e.g., "Implement user authentication")
 
 ### Files Changed Tracking
 
-Ralph counts files changed using `git diff --name-only HEAD` (ralph.sh:376), which shows files modified since the last commit.
+Ralph counts files changed using `git diff --name-only HEAD`, which shows files modified since the last commit.
 
 ## Signal Handling
 
@@ -355,7 +269,7 @@ Ralph implements graceful handling of interruption signals.
 
 ### Graceful Interruption
 
-When you press Ctrl+C (SIGINT) or send SIGTERM (ralph.sh:314-338):
+When you press Ctrl+C (SIGINT) or send SIGTERM:
 
 1. **Stops timer** - Cleans up the display timer
 2. **Displays warning** - Shows interruption message
@@ -379,12 +293,12 @@ When you press Ctrl+C (SIGINT) or send SIGTERM (ralph.sh:314-338):
 ### Exit Codes
 
 - `0` - Success (all tasks completed with completion signal)
-- `1` - Error (validation failure, dependency missing, API error, retry exhausted)
+- `1` - Error (validation failure, dependency missing, API error)
 - `130` - Interrupted by user (Ctrl+C / SIGINT)
 
 ### Signal Trap
 
-Ralph sets up signal traps for clean shutdown (ralph.sh:338):
+Ralph sets up signal traps for clean shutdown:
 
 ```bash
 trap 'on_interrupt' SIGINT SIGTERM
@@ -419,19 +333,6 @@ Features:
 
 **Spinner characters:** `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` (ralph.sh:53)
 
-### Retry Countdown
-
-During retry backoff, Ralph displays a countdown timer (ralph.sh:140-162):
-
-```
-⠋ Waiting... 05:00 remaining
-```
-
-Shows:
-- Animated spinner
-- Time remaining in MM:SS format
-- Updates every second
-
 ### Iteration Header
 
 Each iteration displays a clear header (ralph.sh:684-690):
@@ -448,26 +349,6 @@ Iteration 5 (unlimited)
 ==================================================
 Iteration 5 / 20
 ==================================================
-```
-
-### Model Status Display
-
-Ralph shows model status after API calls:
-
-**Normal mode success:**
-```
-✓ opus
-```
-
-**Poorman mode:**
-```
-✓ claude-sonnet-4-5-20250929 (poorman mode - any model accepted)
-```
-
-**Normal mode retry:**
-```
-⚠  Got sonnet instead of opus
-ℹ  Retrying in 5s (attempt 1/10)
 ```
 
 ## Advanced Usage
@@ -608,20 +489,7 @@ ls -la plans/my-plan/
 chmod u+w plans/my-plan/  # Add write permission
 ```
 
-### Model Issues
-
-**Problem:** `Requested opus but got sonnet` (with retry failures)
-
-**Solution:**
-1. Use `--poorman` mode to accept any model:
-   ```bash
-   ./ralph.sh --poorman plans/my-plan/
-   ```
-2. Or request a different model:
-   ```bash
-   ./ralph.sh --model sonnet plans/my-plan/
-   ```
-3. Check your API tier/quota for the requested model
+### API Issues
 
 **Problem:** API errors or rate limits
 

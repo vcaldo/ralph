@@ -23,13 +23,6 @@ readonly SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 # --- Configuration (set once via CLI flags or defaults) ---
 # Model configuration
 REQUESTED_MODEL="opus"     # Configurable via --model flag, defaults to opus
-POORMAN_MODE=false         # Accept any model returned (no model verification)
-
-# Retry configuration (exponential backoff) - normal mode only
-# These can be overridden via --max-retries, --initial-delay, --max-delay flags
-MAX_RETRIES=10              # Maximum number of retry attempts
-INITIAL_RETRY_DELAY=5       # Starting delay in seconds
-MAX_RETRY_DELAY=600         # Maximum delay cap in seconds (10 minutes)
 
 # --- Global state (modified during execution) ---
 # Metrics tracking variables (METRICS_LOG set after PLAN_DIR is validated)
@@ -123,52 +116,6 @@ stop_timer() {
     fi
 
     # Clear the timer line using ANSI escape sequence
-    printf "\r\033[K"
-}
-
-# Calculate exponential backoff delay with cap
-# Parameters: retry_attempt (0-based: 0, 1, 2, ...)
-# Returns: delay in seconds (5, 10, 20, 40, 80, 160, 320, 600, 600, ...)
-# Note: Safe for MAX_RETRIES up to ~20 before integer overflow concerns
-# Current MAX_RETRIES=10 is well within safe range
-calculate_backoff_delay() {
-    local attempt=$1
-    local delay=$INITIAL_RETRY_DELAY
-
-    # Double the delay for each retry attempt
-    for ((i=0; i<attempt; i++)); do
-        delay=$((delay * 2))
-        if [ $delay -gt $MAX_RETRY_DELAY ]; then
-            delay=$MAX_RETRY_DELAY
-            break
-        fi
-    done
-
-    echo $delay
-}
-
-# Display countdown timer during retry backoff period
-# Parameters: delay_seconds
-wait_with_countdown() {
-    local total_delay=$1
-    local remaining=$total_delay
-
-    while [ $remaining -gt 0 ]; do
-        local mins=$((remaining / 60))
-        local secs=$((remaining % 60))
-
-        # Animate spinner during countdown
-        local spinner_idx=$((total_delay - remaining))
-        local spinner_len=${#SPINNER_CHARS}
-        local char="${SPINNER_CHARS:$((spinner_idx % spinner_len)):1}"
-
-        printf "\r${CYAN}%s${NC} Waiting... %02d:%02d remaining" "$char" "$mins" "$secs"
-
-        sleep 1
-        remaining=$((remaining - 1))
-    done
-
-    # Clear the countdown line
     printf "\r\033[K"
 }
 
@@ -379,17 +326,6 @@ trap 'on_interrupt' SIGINT SIGTERM
 # =============================================================================
 # METRICS FUNCTIONS
 # =============================================================================
-
-# Extract model name from Claude JSON response
-# Parameters: $1 = JSON string
-# Returns: Model name via stdout (or "unknown" if extraction fails)
-extract_model_from_json() {
-    local json="$1"
-    local model
-    model=$(echo "$json" | jq -r '.modelUsage | to_entries | max_by(.value.inputTokens + .value.outputTokens) | .key // "unknown"' 2>/dev/null)
-    [[ -z "$model" ]] && model="unknown"
-    echo "$model"
-}
 
 extract_iteration_metrics() {
     local json="$1"
@@ -616,46 +552,6 @@ while [[ "${1:-}" == --* ]]; do
                     ;;
             esac
             ;;
-        --poorman)
-            POORMAN_MODE=true
-            shift
-            ;;
-        --max-retries)
-            if [[ -z "${2:-}" ]] || [[ "${2:-}" == --* ]]; then
-                log_error "--max-retries requires a positive integer argument"
-                exit 1
-            fi
-            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
-                log_error "--max-retries must be a positive integer, got: $2"
-                exit 1
-            fi
-            MAX_RETRIES="$2"
-            shift 2
-            ;;
-        --initial-delay)
-            if [[ -z "${2:-}" ]] || [[ "${2:-}" == --* ]]; then
-                log_error "--initial-delay requires a positive integer argument (seconds)"
-                exit 1
-            fi
-            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
-                log_error "--initial-delay must be a positive integer, got: $2"
-                exit 1
-            fi
-            INITIAL_RETRY_DELAY="$2"
-            shift 2
-            ;;
-        --max-delay)
-            if [[ -z "${2:-}" ]] || [[ "${2:-}" == --* ]]; then
-                log_error "--max-delay requires a positive integer argument (seconds)"
-                exit 1
-            fi
-            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
-                log_error "--max-delay must be a positive integer, got: $2"
-                exit 1
-            fi
-            MAX_RETRY_DELAY="$2"
-            shift 2
-            ;;
         *)
             log_error "Unknown option: $1"
             exit 1
@@ -668,21 +564,15 @@ if [ -z "${1:-}" ]; then
     echo ""
     echo "Options:"
     echo "  --model MODEL          Specify which model to use (haiku, sonnet, or opus). Default: opus"
-    echo "  --poorman              Accept any model returned (no model verification)"
-    echo "  --max-retries N        Maximum retry attempts when wrong model returned. Default: 10"
-    echo "  --initial-delay N      Initial retry delay in seconds. Default: 5"
-    echo "  --max-delay N          Maximum retry delay cap in seconds. Default: 600"
     echo ""
     echo "Arguments:"
     echo "  plan-dir               Directory containing the plan (must have TODO.md)"
     echo "  iterations             (optional) Maximum number of iterations to run. If omitted, runs until completion."
     echo ""
     echo "Examples:"
-    echo "  $0 plans/arena-v2/                          # Run until complete (unlimited)"
-    echo "  $0 plans/arena-v2/ 10                       # Run max 10 iterations using opus"
-    echo "  $0 --model sonnet plans/arena-v2/           # Run until complete using sonnet"
-    echo "  $0 --model sonnet --poorman plans/arena-v2/ 10  # Run with sonnet, accept any model"
-    echo "  $0 --max-retries 5 --max-delay 300 plans/arena-v2/  # Custom retry configuration"
+    echo "  $0 plans/arena-v2/                 # Run until complete (unlimited)"
+    echo "  $0 plans/arena-v2/ 10              # Run max 10 iterations using opus"
+    echo "  $0 --model sonnet plans/arena-v2/  # Run until complete using sonnet"
     exit 1
 fi
 
@@ -731,9 +621,6 @@ log_info "Model: $REQUESTED_MODEL"
 log_info "TODO file: $TODO_FILE"
 log_info "Progress file: $PROGRESS_FILE"
 log_info "Metrics file: $METRICS_LOG"
-if [ "$POORMAN_MODE" = true ]; then
-    log_warn "Poorman mode: model verification disabled"
-fi
 echo ""
 
 # =============================================================================
@@ -807,68 +694,15 @@ while true; do
     claude_json=""
     CLAUDE_EXIT_CODE=0
 
-    if [ "$POORMAN_MODE" = true ]; then
-        # Poorman mode: try requested model once, accept any model
-        start_timer
-        call_claude_api
-        stop_timer
-        ACTUAL_MODEL=$(extract_model_from_json "$claude_json")
-        echo "✓ $ACTUAL_MODEL (poorman mode - any model accepted)"
-    else
-        # Normal mode: retry with exponential backoff if wrong model returned
-        RETRY_ATTEMPT=0
-        MODEL_OBTAINED=false
+    echo "Running $REQUESTED_MODEL..."
+    start_timer
+    call_claude_api
+    stop_timer
 
-        while [ $RETRY_ATTEMPT -le $MAX_RETRIES ]; do
-            # Show attempt number
-            if [ $RETRY_ATTEMPT -eq 0 ]; then
-                echo "Requesting $REQUESTED_MODEL..."
-            else
-                echo "Requesting $REQUESTED_MODEL (attempt $((RETRY_ATTEMPT + 1))/$((MAX_RETRIES + 1)))..."
-            fi
-
-            # Make API call with timer
-            start_timer
-            call_claude_api
-            stop_timer
-
-            # Check for API errors (fail fast - no retry)
-            if [ $CLAUDE_EXIT_CODE -ne 0 ]; then
-                log_error "API call failed with exit code $CLAUDE_EXIT_CODE"
-                log_error "Not retrying on API errors"
-                exit 1
-            fi
-
-            # Validate JSON (fail fast - no retry)
-            if ! echo "$claude_json" | jq empty 2>/dev/null; then
-                log_error "Invalid JSON response"
-                exit 1
-            fi
-
-            # Extract and check model
-            ACTUAL_MODEL=$(extract_model_from_json "$claude_json")
-
-            if echo "$ACTUAL_MODEL" | grep -qi "$REQUESTED_MODEL"; then
-                # Success! Got the right model
-                echo "✓ $REQUESTED_MODEL"
-                MODEL_OBTAINED=true
-                break
-            else
-                # Wrong model - retry with backoff
-                if [ $RETRY_ATTEMPT -lt $MAX_RETRIES ]; then
-                    BACKOFF_DELAY=$(calculate_backoff_delay $RETRY_ATTEMPT)
-                    log_warn "Got $ACTUAL_MODEL instead of $REQUESTED_MODEL"
-                    log_info "Retrying in ${BACKOFF_DELAY}s (attempt $((RETRY_ATTEMPT + 1))/$MAX_RETRIES)"
-                    wait_with_countdown $BACKOFF_DELAY
-                    RETRY_ATTEMPT=$((RETRY_ATTEMPT + 1))
-                else
-                    # Exhausted all retries
-                    log_error "Requested $REQUESTED_MODEL but got $ACTUAL_MODEL"
-                    log_error "Exhausted all $MAX_RETRIES retry attempts"
-                    exit 1
-                fi
-            fi
-        done
+    # Check for API errors
+    if [ $CLAUDE_EXIT_CODE -ne 0 ]; then
+        log_error "API call failed with exit code $CLAUDE_EXIT_CODE"
+        exit 1
     fi
 
     # Extract text content from JSON for completion check and display
