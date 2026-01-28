@@ -790,6 +790,12 @@ while true; do
     echo "=================================================="
     echo ""
 
+    # Extract current task BEFORE Claude runs (it will mark the task complete)
+    CURRENT_TASK=$(grep -m 1 '^\s*- \[ \]' "$TODO_FILE" | sed 's/^\s*- \[ \] //')
+    if [[ -z "$CURRENT_TASK" ]]; then
+        CURRENT_TASK="Ralph iteration $ITERATION_COUNT"
+    fi
+
     # Capture start time for metrics
     ITERATION_START=$SECONDS
 
@@ -873,16 +879,6 @@ while true; do
 
     # Auto-commit changes if files were modified
     if [ "$ITERATION_FILES_CHANGED" -gt 0 ]; then
-        # Extract current task from TODO file for commit message (first unchecked item)
-        # Format: "- [ ] Task description" -> "Task description"
-        CURRENT_TASK=$(grep -m 1 '^\s*- \[ \]' "$TODO_FILE" | sed 's/^\s*- \[ \] //')
-
-        # Validate task name is not empty (could happen if no unchecked tasks exist)
-        if [[ -z "$CURRENT_TASK" ]]; then
-            log_warn "No unchecked tasks found in TODO file"
-            CURRENT_TASK="Ralph iteration $ITERATION_COUNT"
-        fi
-
         commit_changes "$CURRENT_TASK"
     fi
 
