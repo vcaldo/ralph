@@ -265,6 +265,14 @@ commit_changes() {
     fi
 }
 
+# Extract task name from the most recent progress entry
+# Returns the task name or empty string if not found
+extract_task_from_progress() {
+    local progress_file="$1"
+    # Look for "Task:" line in the last 50 lines of progress file
+    tail -50 "$progress_file" 2>/dev/null | grep -m 1 -i '^Task:' | sed 's/^[Tt]ask:[[:space:]]*//'
+}
+
 # Call Claude API with the standard prompt
 # Sets globals: claude_json, CLAUDE_EXIT_CODE
 # Uses globals: REQUESTED_MODEL, TODO_FILE, PROGRESS_FILE
@@ -685,12 +693,6 @@ while true; do
     echo "=================================================="
     echo ""
 
-    # Extract current task BEFORE Claude runs (it will mark the task complete)
-    CURRENT_TASK=$(grep -m 1 '^\s*- \[ \]' "$TODO_FILE" | sed 's/^\s*- \[ \] //')
-    if [[ -z "$CURRENT_TASK" ]]; then
-        CURRENT_TASK="Ralph iteration $ITERATION_COUNT"
-    fi
-
     # Capture start time for metrics
     ITERATION_START=$SECONDS
 
@@ -719,9 +721,15 @@ while true; do
     # Extract and log metrics
     extract_iteration_metrics "$claude_json" "$ITERATION_START"
 
+    # Extract task name from progress file (Claude writes "Task:" line)
+    COMMIT_MSG=$(extract_task_from_progress "$PROGRESS_FILE")
+    if [[ -z "$COMMIT_MSG" ]]; then
+        COMMIT_MSG="Ralph: iteration $ITERATION_COUNT"
+    fi
+
     # Auto-commit changes if files were modified
     if [ "$ITERATION_FILES_CHANGED" -gt 0 ]; then
-        commit_changes "$CURRENT_TASK"
+        commit_changes "$COMMIT_MSG"
     fi
 
     # Display interaction result with phase separator
