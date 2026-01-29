@@ -269,8 +269,9 @@ commit_changes() {
 # Returns the task name or empty string if not found
 extract_task_from_progress() {
     local progress_file="$1"
-    # Look for "Task:" line in the last 50 lines of progress file
-    tail -50 "$progress_file" 2>/dev/null | grep -m 1 -i '^Task:' | sed 's/^[Tt]ask:[[:space:]]*//'
+    # Look for most recent "Task:" line in the last 50 lines of progress file
+    # tac reverses lines so grep -m 1 finds the newest entry first
+    tail -50 "$progress_file" 2>/dev/null | tac | grep -m 1 -i '^Task:' | sed 's/^[Tt]ask:[[:space:]]*//'
 }
 
 # Call Claude API with the standard prompt
