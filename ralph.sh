@@ -278,6 +278,9 @@ extract_task_from_progress() {
 # Sets globals: claude_json, CLAUDE_EXIT_CODE
 # Uses globals: REQUESTED_MODEL, TODO_FILE, PROGRESS_FILE
 call_claude_api() {
+    local claude_stderr
+    claude_stderr=$(mktemp)
+
     claude_json=$(claude --output-format json --model "$REQUESTED_MODEL" --permission-mode bypassPermissions -p "Find the highest-priority task from the TODO file and work only on that task.
 
 Here are the current TODO items and progress:
@@ -299,7 +302,18 @@ Guidelines:
 IMPORTANT: Only work on a SINGLE task per iteration.
 
 If, while working on the task, you determine ALL tasks are complete, output exactly this:
-<promise>COMPLETE</promise>" 2>/dev/null) || CLAUDE_EXIT_CODE=$?
+<promise>COMPLETE</promise>" 2>"$claude_stderr") || CLAUDE_EXIT_CODE=$?
+
+    # If claude failed, show the error
+    if [[ $CLAUDE_EXIT_CODE -ne 0 ]]; then
+        log_error "Claude CLI failed with exit code $CLAUDE_EXIT_CODE"
+        if [[ -s "$claude_stderr" ]]; then
+            log_error "Error output:"
+            cat "$claude_stderr" >&2
+        fi
+    fi
+
+    rm -f "$claude_stderr"
 }
 
 # =============================================================================
