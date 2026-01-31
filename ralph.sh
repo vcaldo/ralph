@@ -122,7 +122,8 @@ start_timer() {
         local start_time=$TIMER_START_TIME
 
         while true; do
-            local now=$(date +%s)
+            local now
+            now=$(date +%s)
             local elapsed=$((now - start_time))
             local mins=$((elapsed / 60))
             local secs=$((elapsed % 60))
@@ -638,7 +639,8 @@ extract_result_opencode() {
 
 append_metrics_log() {
     # Get ISO 8601 timestamp
-    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local timestamp
+    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
     # Build JSON object using jq for proper escaping
     jq -n \
@@ -678,10 +680,12 @@ append_metrics_log() {
 
 print_metrics_summary() {
     # Format duration (convert seconds to minutes:seconds)
-    local duration_str=$(format_duration "$ITERATION_DURATION")
+    local duration_str
+    duration_str=$(format_duration "$ITERATION_DURATION")
 
     # Calculate cache hit rate
-    local cache_hit_rate=$(calculate_cache_hit_rate "$ITERATION_CACHE_READ_TOKENS" "$ITERATION_INPUT_TOKENS")
+    local cache_hit_rate
+    cache_hit_rate=$(calculate_cache_hit_rate "$ITERATION_CACHE_READ_TOKENS" "$ITERATION_INPUT_TOKENS")
 
     # Status icon
     local status_icon="✓"
@@ -724,11 +728,16 @@ print_final_summary() {
         total_cache_read: (map(.usage.cache_read_tokens) | add // 0)
     }' "$METRICS_LOG" 2>/dev/null || echo '{"success_count":0,"min_duration":0,"max_duration":0,"total_cache_create":0,"total_cache_read":0}')
 
-    local success_count=$(echo "$aggregates" | jq -r '.success_count')
-    local min_duration=$(echo "$aggregates" | jq -r '.min_duration')
-    local max_duration=$(echo "$aggregates" | jq -r '.max_duration')
-    local total_cache_create=$(echo "$aggregates" | jq -r '.total_cache_create')
-    local total_cache_read=$(echo "$aggregates" | jq -r '.total_cache_read')
+    local success_count
+    success_count=$(echo "$aggregates" | jq -r '.success_count')
+    local min_duration
+    min_duration=$(echo "$aggregates" | jq -r '.min_duration')
+    local max_duration
+    max_duration=$(echo "$aggregates" | jq -r '.max_duration')
+    local total_cache_create
+    total_cache_create=$(echo "$aggregates" | jq -r '.total_cache_create')
+    local total_cache_read
+    total_cache_read=$(echo "$aggregates" | jq -r '.total_cache_read')
 
     # Calculate success rate
     local success_rate=0
@@ -751,10 +760,12 @@ print_final_summary() {
     fi
 
     # Calculate overall cache hit rate
-    local cache_hit_rate=$(calculate_cache_hit_rate "$total_cache_read" "$TOTAL_INPUT_TOKENS")
+    local cache_hit_rate
+    cache_hit_rate=$(calculate_cache_hit_rate "$total_cache_read" "$TOTAL_INPUT_TOKENS")
 
     # Format total duration
-    local total_duration_str=$(format_duration "$TOTAL_DURATION")
+    local total_duration_str
+    total_duration_str=$(format_duration "$TOTAL_DURATION")
 
     echo "Iterations:"
     if [[ "$INFINITE_MODE" == true ]]; then
