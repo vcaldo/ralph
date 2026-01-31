@@ -32,7 +32,8 @@ readonly SEPARATOR="=================================================="
 # Model configuration
 REQUESTED_MODEL="opus"     # Configurable via --model flag, defaults to opus
 SELECTED_CLI="claude"      # Configurable via --cli flag, defaults to claude
-OPENCODE_PROVIDER="anthropic"  # Configurable via --provider flag, defaults to anthropic
+OPENCODE_PROVIDER=""       # Configurable via --provider flag, required for opencode
+MODEL_EXPLICITLY_SET=false # Track if --model was explicitly provided
 
 # --- Global state (modified during execution) ---
 # Metrics tracking variables (METRICS_LOG set after PLAN_DIR is validated)
@@ -238,10 +239,17 @@ format_duration() {
 
 # Translate ralph model name to OpenCode format
 # Parameters: model (opus|sonnet|haiku)
-# Uses: OPENCODE_PROVIDER
-# Returns: Full model name (e.g., "anthropic/claude-opus-4-5")
+# Uses: OPENCODE_PROVIDER, MODEL_EXPLICITLY_SET
+# Returns: Full model name (e.g., "anthropic/claude-opus-4-5" or "openrouter/glm-4-7-free")
 get_opencode_model() {
     local model="$1"
+
+    # If using openrouter without explicitly setting a model, default to GLM-4.7 free
+    if [[ "$OPENCODE_PROVIDER" == "openrouter" && "$MODEL_EXPLICITLY_SET" == "false" ]]; then
+        echo "openrouter/glm-4-7-free"
+        return
+    fi
+
     local suffix
     case "$model" in
         opus) suffix="claude-opus-4-5" ;;
@@ -807,6 +815,7 @@ while [[ "${1:-}" == --* ]]; do
             case "$2" in
                 haiku|sonnet|opus)
                     REQUESTED_MODEL="$2"
+                    MODEL_EXPLICITLY_SET=true
                     shift 2
                     ;;
                 *)
@@ -833,16 +842,16 @@ while [[ "${1:-}" == --* ]]; do
             ;;
         --provider)
             if [[ -z "${2:-}" ]] || [[ "${2:-}" == --* ]]; then
-                log_error "--provider requires an argument (anthropic|github-copilot)"
+                log_error "--provider requires an argument (anthropic|github-copilot|openrouter)"
                 exit 1
             fi
             case "$2" in
-                anthropic|github-copilot)
+                anthropic|github-copilot|openrouter)
                     OPENCODE_PROVIDER="$2"
                     shift 2
                     ;;
                 *)
-                    log_error "Invalid provider: $2 (must be anthropic or github-copilot)"
+                    log_error "Invalid provider: $2 (must be anthropic, github-copilot, or openrouter)"
                     exit 1
                     ;;
             esac
@@ -854,13 +863,19 @@ while [[ "${1:-}" == --* ]]; do
     esac
 done
 
+# Validate that --provider is specified when using opencode
+if [[ "$SELECTED_CLI" == "opencode" && -z "$OPENCODE_PROVIDER" ]]; then
+    log_error "When using --cli opencode, you must specify --provider (anthropic|github-copilot|openrouter)"
+    exit 1
+fi
+
 if [[ -z "${1:-}" ]]; then
     log_error "Usage: $0 [options] <plan-dir> [iterations]"
     echo ""
     echo "Options:"
     echo "  --model MODEL          Specify which model to use (haiku, sonnet, or opus). Default: opus"
     echo "  --cli CLI              CLI to use: claude or opencode (default: claude, env: RALPH_CLI)"
-    echo "  --provider PROV        OpenCode provider: anthropic or github-copilot (default: anthropic)"
+    echo "  --provider PROV        OpenCode provider: anthropic, github-copilot, or openrouter (required for opencode)"
     echo ""
     echo "Arguments:"
     echo "  plan-dir               Directory containing the plan (must have TODO.md)"
@@ -870,9 +885,8 @@ if [[ -z "${1:-}" ]]; then
     echo "  $0 plans/arena-v2/                 # Run until complete (unlimited)"
     echo "  $0 plans/arena-v2/ 10              # Run max 10 iterations using opus"
     echo "  $0 --model sonnet plans/arena-v2/  # Run until complete using sonnet"
-    echo "  $0 --cli opencode plans/arena-v2/                    # Run with OpenCode"
-    echo "  RALPH_CLI=opencode $0 plans/arena-v2/                # Use env var"
-    echo "  $0 --cli opencode --provider github-copilot plans/arena-v2/"
+    echo "  $0 --cli opencode --provider openrouter plans/arena-v2/  # OpenCode with GLM-4.7 free"
+    echo "  $0 --cli opencode --provider anthropic --model opus plans/arena-v2/"
     exit 1
 fi
 
@@ -919,10 +933,12 @@ if [[ "$INFINITE_MODE" == true ]]; then
 else
     log_info "Iterations: $ITERATIONS"
 fi
-log_info "Model: $REQUESTED_MODEL"
 log_info "CLI: $SELECTED_CLI"
 if [[ "$SELECTED_CLI" == "opencode" ]]; then
     log_info "Provider: $OPENCODE_PROVIDER"
+    log_info "Model: $(get_opencode_model "$REQUESTED_MODEL")"
+else
+    log_info "Model: $REQUESTED_MODEL"
 fi
 log_info "TODO file: $TODO_FILE"
 log_info "Progress file: $PROGRESS_FILE"
