@@ -426,6 +426,56 @@ If, while working on the task, you determine ALL tasks are complete, output exac
     done
 }
 
+# Call OpenCode API with the standard prompt
+# Sets globals: opencode_output, CLAUDE_EXIT_CODE (reusing for consistency)
+# Uses globals: REQUESTED_MODEL, TODO_FILE, PROGRESS_FILE, OPENCODE_PROVIDER
+call_opencode_api() {
+    local opencode_stderr
+    opencode_stderr=$(mktemp)
+    CLAUDE_EXIT_CODE=0
+    opencode_output=""
+
+    # Get full model name
+    local full_model
+    full_model=$(get_opencode_model "$REQUESTED_MODEL")
+
+    # Build the prompt (same as Claude)
+    local prompt="Find the highest-priority task from the TODO file and work only on that task.
+
+Here are the current TODO items and progress files to reference.
+
+Guidelines:
+1. Pick ONE task from the TODO file that you determine has the highest priority
+2. Work ONLY on that task - do not work on multiple tasks
+3. Update the TODO file by marking the task as complete (change [ ] to [x]) or updating its status
+4. After completing the task, append your progress to the progress file with this format:
+   - Current date/time
+   - Task name
+   - What was accomplished
+   - Next steps (if any)
+5. At the END of your response, output a commit message for your changes:
+   <commit>Brief description of changes (imperative mood, under 72 chars)</commit>
+
+IMPORTANT: Only work on a SINGLE task per iteration.
+IMPORTANT: NEVER delete the TODO file - only edit it to mark tasks complete.
+
+If, while working on the task, you determine ALL tasks are complete, output exactly this:
+<promise>COMPLETE</promise>"
+
+    # Run opencode
+    opencode_output=$(opencode run --format json \
+        --model "$full_model" \
+        --file "$TODO_FILE" \
+        --file "$PROGRESS_FILE" \
+        "$prompt" 2>"$opencode_stderr") || CLAUDE_EXIT_CODE=$?
+
+    if [[ $CLAUDE_EXIT_CODE -ne 0 ]]; then
+        log_stderr_file "$opencode_stderr" "error"
+    else
+        rm -f "$opencode_stderr"
+    fi
+}
+
 # =============================================================================
 # SIGNAL HANDLING (Graceful Interrupt)
 # =============================================================================
