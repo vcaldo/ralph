@@ -664,6 +664,7 @@ print_final_summary() {
 # =============================================================================
 
 # Parse optional flags
+SELECTED_CLI="${RALPH_CLI:-$SELECTED_CLI}"
 while [[ "${1:-}" == --* ]]; do
     case "$1" in
         --model)
@@ -678,6 +679,22 @@ while [[ "${1:-}" == --* ]]; do
                     ;;
                 *)
                     log_error "Invalid model: $2 (must be haiku, sonnet, or opus)"
+                    exit 1
+                    ;;
+            esac
+            ;;
+        --cli)
+            if [[ -z "${2:-}" ]] || [[ "${2:-}" == --* ]]; then
+                log_error "--cli requires an argument (claude|opencode)"
+                exit 1
+            fi
+            case "$2" in
+                claude|opencode)
+                    SELECTED_CLI="$2"
+                    shift 2
+                    ;;
+                *)
+                    log_error "Invalid cli: $2 (must be claude or opencode)"
                     exit 1
                     ;;
             esac
