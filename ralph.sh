@@ -982,10 +982,12 @@ while true; do
     claude_json=""
     CLAUDE_EXIT_CODE=0
 
-    echo "Running $REQUESTED_MODEL..."
-    start_timer
-    call_claude_api
-    stop_timer
+    # Run the selected CLI
+    if [[ "$SELECTED_CLI" == "opencode" ]]; then
+        call_opencode_api
+    else
+        call_claude_api
+    fi
 
     # Check if interrupted - exit gracefully
     if [[ "$INTERRUPTED" == true ]]; then
