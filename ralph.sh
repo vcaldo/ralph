@@ -675,7 +675,30 @@ while [[ "${1:-}" == --* ]]; do
                     REQUESTED_MODEL="$2"
                     shift 2
                     ;;
-        # --provider handled in later task (not implemented in this iteration)
+                *)
+                    log_error "Invalid model: $2 (must be haiku, sonnet, or opus)"
+                    exit 1
+                    ;;
+            esac
+            ;;
+
+        --provider)
+            if [[ -z "${2:-}" ]] || [[ "${2:-}" == --* ]]; then
+                log_error "--provider requires an argument (anthropic|github-copilot)"
+                exit 1
+            fi
+            case "$2" in
+                anthropic|github-copilot)
+                    OPENCODE_PROVIDER="$2"
+                    shift 2
+                    ;;
+                *)
+                    log_error "Invalid provider: $2 (must be anthropic or github-copilot)"
+                    exit 1
+                    ;;
+            esac
+            ;;
+
         --cli)
             if [[ -z "${2:-}" ]] || [[ "${2:-}" == --* ]]; then
                 log_error "--cli requires an argument (claude|opencode)"
@@ -692,12 +715,7 @@ while [[ "${1:-}" == --* ]]; do
                     ;;
             esac
             ;;
-                *)
-                    log_error "Invalid model: $2 (must be haiku, sonnet, or opus)"
-                    exit 1
-                    ;;
-            esac
-            ;;
+
         *)
             log_error "Unknown option: $1"
             exit 1
