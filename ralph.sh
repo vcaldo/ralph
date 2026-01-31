@@ -31,8 +31,8 @@ readonly SEPARATOR="=================================================="
 # --- Configuration (set once via CLI flags or defaults) ---
 # Model configuration
 REQUESTED_MODEL="opus"     # Configurable via --model flag, defaults to opus
-SELECTED_CLI="claude"      # Configurable via --cli flag, defaults to claude
-OPENCODE_PROVIDER=""       # Configurable via --provider flag, required for opencode
+SELECTED_CLI="${RALPH_CLI:-claude}"  # CLI to use: claude or opencode (env: RALPH_CLI)
+OPENCODE_PROVIDER="anthropic"        # OpenCode provider: anthropic or github-copilot
 MODEL_EXPLICITLY_SET=false # Track if --model was explicitly provided
 
 # --- Global state (modified during execution) ---
@@ -327,6 +327,31 @@ check_git_state() {
     fi
 
     return 0
+}
+
+# Create and checkout a plan-specific branch
+# Parameters: model - The model name (e.g., sonnet, opus)
+#            plan_name - The plan directory name
+# Returns: 0 if successful, 1 if failed
+create_plan_branch() {
+    local model="$1"
+    local plan_name="$2"
+    local branch_name="ralph/${model}-${plan_name}"
+
+    # Check if branch already exists
+    if git show-ref --verify --quiet "refs/heads/$branch_name"; then
+        log_info "Branch '$branch_name' already exists, checking out..."
+        git checkout "$branch_name" 2>/dev/null || {
+            log_error "Failed to checkout existing branch '$branch_name'"
+            return 1
+        }
+    else
+        log_info "Creating branch '$branch_name'..."
+        git checkout -b "$branch_name" 2>/dev/null || {
+            log_error "Failed to create branch '$branch_name'"
+            return 1
+        }
+    fi
 }
 
 # Commit changes made during an iteration
@@ -1006,6 +1031,11 @@ fi
 
 # Verify git repository state
 if ! check_git_state; then
+    exit 1
+fi
+
+# Create and checkout plan branch
+if ! create_plan_branch "$REQUESTED_MODEL" "$PLAN_NAME"; then
     exit 1
 fi
 
