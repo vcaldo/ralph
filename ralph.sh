@@ -31,6 +31,8 @@ readonly SEPARATOR="=================================================="
 # --- Configuration (set once via CLI flags or defaults) ---
 # Model configuration
 REQUESTED_MODEL="opus"     # Configurable via --model flag, defaults to opus
+SELECTED_CLI="claude"      # Configurable via --cli flag, defaults to claude
+OPENCODE_PROVIDER="anthropic"  # Configurable via --provider flag, defaults to anthropic
 
 # --- Global state (modified during execution) ---
 # Metrics tracking variables (METRICS_LOG set after PLAN_DIR is validated)
