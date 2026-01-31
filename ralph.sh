@@ -393,7 +393,7 @@ extract_commit_message() {
 }
 
 # Build the standard prompt for both Claude and OpenCode CLIs
-# Uses: TODO_FILE, PROGRESS_FILE
+# Uses: TODO_SNAPSHOT, PROGRESS_FILE
 # Returns: The prompt string (via stdout)
 build_prompt() {
     cat <<EOF
@@ -401,7 +401,7 @@ Find the highest-priority task from the TODO file and work only on that task.
 
 Here are the current TODO items and progress:
 
-@$TODO_FILE
+@$TODO_SNAPSHOT
 
 @$PROGRESS_FILE
 
@@ -524,7 +524,7 @@ call_opencode_api() {
         # Run opencode (-- separates options from message to avoid parsing issues)
         opencode_output=$(opencode run --format json \
             --model "$full_model" \
-            --file "$TODO_FILE" \
+            --file "$TODO_SNAPSHOT" \
             --file "$PROGRESS_FILE" \
             -- "$prompt" 2>"$opencode_stderr") || CLAUDE_EXIT_CODE=$?
 
