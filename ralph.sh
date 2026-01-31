@@ -176,12 +176,20 @@ require_command() {
 check_dependencies() {
     local missing_deps=0
 
-    # Check for claude CLI (special install instructions)
-    if ! command -v claude &> /dev/null; then
-        log_error "claude CLI not found"
-        echo "  Install: npm install -g @anthropic-ai/claude-code"
-        echo "  Or visit: https://docs.anthropic.com/claude-code"
-        missing_deps=1
+    # Check for selected CLI (special install instructions)
+    if [[ "$SELECTED_CLI" == "opencode" ]]; then
+        if ! command -v opencode &> /dev/null; then
+            log_error "opencode CLI not found"
+            echo "  Install: go install github.com/opencode-ai/opencode@latest"
+            missing_deps=1
+        fi
+    else
+        if ! command -v claude &> /dev/null; then
+            log_error "claude CLI not found"
+            echo "  Install: npm install -g @anthropic-ai/claude-code"
+            echo "  Or visit: https://docs.anthropic.com/claude-code"
+            missing_deps=1
+        fi
     fi
 
     # Check for jq and git
