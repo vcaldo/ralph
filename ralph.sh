@@ -617,6 +617,14 @@ extract_iteration_metrics_opencode() {
     INTERACTION_COUNT=$((INTERACTION_COUNT + 1))
 }
 
+# Extract result text from OpenCode JSONL output
+# Parameters: jsonl_output
+# Returns: The concatenated text content
+extract_result_opencode() {
+    local jsonl="$1"
+    echo "$jsonl" | jq -rs '[.[] | select(.type == "text") | .part.text // ""] | join("")' 2>/dev/null || echo ""
+}
+
 append_metrics_log() {
     # Get ISO 8601 timestamp
     local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
