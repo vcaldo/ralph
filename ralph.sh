@@ -287,6 +287,18 @@ calculate_cache_hit_rate() {
     fi
 }
 
+# Check if a file path is writable (creates parent directories if needed)
+# Arguments: $1 = file path, $2 = description for error message
+# Returns: 0 if writable, exits with error if not
+check_file_writable() {
+    local file="$1"
+    local description="$2"
+    if ! touch "$file" 2>/dev/null; then
+        log_error "Cannot write to $description: $file"
+        exit 1
+    fi
+}
+
 # Check git repository state before starting
 # Ensures clean working directory and valid branch
 check_git_state() {
@@ -355,27 +367,12 @@ extract_commit_message() {
     echo "$result" | grep -oP '(?<=<commit>).*(?=</commit>)' | tail -1 || true
 }
 
-# Call Claude API with the standard prompt
-# Includes retry logic with exponential backoff and timeout
-# Sets globals: claude_json, CLAUDE_EXIT_CODE
-# Uses globals: REQUESTED_MODEL, TODO_FILE, PROGRESS_FILE, MAX_RETRIES, INITIAL_BACKOFF_SECONDS, CLAUDE_TIMEOUT_SECONDS
-call_claude_api() {
-    local attempt=1
-    local backoff=$INITIAL_BACKOFF_SECONDS
-    local claude_stderr
-
-    while [[ $attempt -le $MAX_RETRIES ]]; do
-        # Check if interrupted before attempting
-        if [[ "$INTERRUPTED" == true ]]; then
-            return 1
-        fi
-
-        claude_stderr=$(mktemp)
-        CLAUDE_EXIT_CODE=0
-        claude_json=""
-
-        # Build the prompt (extracted to avoid duplication between timeout/no-timeout paths)
-        local prompt="Find the highest-priority task from the TODO file and work only on that task.
+# Build the standard prompt for both Claude and OpenCode CLIs
+# Uses: TODO_FILE, PROGRESS_FILE
+# Returns: The prompt string (via stdout)
+build_prompt() {
+    cat <<EOF
+Find the highest-priority task from the TODO file and work only on that task.
 
 Here are the current TODO items and progress:
 
@@ -399,7 +396,32 @@ IMPORTANT: Only work on a SINGLE task per iteration.
 IMPORTANT: NEVER delete the TODO file - only edit it to mark tasks complete.
 
 If, while working on the task, you determine ALL tasks are complete, output exactly this:
-<promise>COMPLETE</promise>"
+<promise>COMPLETE</promise>
+EOF
+}
+
+# Call Claude API with the standard prompt
+# Includes retry logic with exponential backoff and timeout
+# Sets globals: claude_json, CLAUDE_EXIT_CODE
+# Uses globals: REQUESTED_MODEL, TODO_FILE, PROGRESS_FILE, MAX_RETRIES, INITIAL_BACKOFF_SECONDS, CLAUDE_TIMEOUT_SECONDS
+call_claude_api() {
+    local attempt=1
+    local backoff=$INITIAL_BACKOFF_SECONDS
+    local claude_stderr
+
+    while [[ $attempt -le $MAX_RETRIES ]]; do
+        # Check if interrupted before attempting
+        if [[ "$INTERRUPTED" == true ]]; then
+            return 1
+        fi
+
+        claude_stderr=$(mktemp)
+        CLAUDE_EXIT_CODE=0
+        claude_json=""
+
+        # Get the shared prompt
+        local prompt
+        prompt=$(build_prompt)
 
         # Run claude with timeout (if available)
         if command -v timeout &> /dev/null; then
@@ -448,53 +470,69 @@ If, while working on the task, you determine ALL tasks are complete, output exac
 }
 
 # Call OpenCode API with the standard prompt
+# Includes retry logic with exponential backoff (matching call_claude_api behavior)
 # Sets globals: opencode_output, CLAUDE_EXIT_CODE (reusing for consistency)
-# Uses globals: REQUESTED_MODEL, TODO_FILE, PROGRESS_FILE, OPENCODE_PROVIDER
+# Uses globals: REQUESTED_MODEL, TODO_FILE, PROGRESS_FILE, OPENCODE_PROVIDER, MAX_RETRIES, INITIAL_BACKOFF_SECONDS
 call_opencode_api() {
+    local attempt=1
+    local backoff=$INITIAL_BACKOFF_SECONDS
     local opencode_stderr
-    opencode_stderr=$(mktemp)
-    CLAUDE_EXIT_CODE=0
-    opencode_output=""
 
     # Get full model name
     local full_model
     full_model=$(get_opencode_model "$REQUESTED_MODEL")
 
-    # Build the prompt (same as Claude)
-    local prompt="Find the highest-priority task from the TODO file and work only on that task.
+    # Get the shared prompt
+    local prompt
+    prompt=$(build_prompt)
 
-Here are the current TODO items and progress files to reference.
+    while [[ $attempt -le $MAX_RETRIES ]]; do
+        # Check if interrupted before attempting
+        if [[ "$INTERRUPTED" == true ]]; then
+            return 1
+        fi
 
-Guidelines:
-1. Pick ONE task from the TODO file that you determine has the highest priority
-2. Work ONLY on that task - do not work on multiple tasks
-3. Update the TODO file by marking the task as complete (change [ ] to [x]) or updating its status
-4. After completing the task, append your progress to the progress file with this format:
-   - Current date/time
-   - Task name
-   - What was accomplished
-   - Next steps (if any)
-5. At the END of your response, output a commit message for your changes:
-   <commit>Brief description of changes (imperative mood, under 72 chars)</commit>
+        opencode_stderr=$(mktemp)
+        CLAUDE_EXIT_CODE=0
+        opencode_output=""
 
-IMPORTANT: Only work on a SINGLE task per iteration.
-IMPORTANT: NEVER delete the TODO file - only edit it to mark tasks complete.
+        # Run opencode (-- separates options from message to avoid parsing issues)
+        opencode_output=$(opencode run --format json \
+            --model "$full_model" \
+            --file "$TODO_FILE" \
+            --file "$PROGRESS_FILE" \
+            -- "$prompt" 2>"$opencode_stderr") || CLAUDE_EXIT_CODE=$?
 
-If, while working on the task, you determine ALL tasks are complete, output exactly this:
-<promise>COMPLETE</promise>"
+        # Success - clean up and return
+        if [[ $CLAUDE_EXIT_CODE -eq 0 ]]; then
+            rm -f "$opencode_stderr"
+            return 0
+        fi
 
-    # Run opencode (-- separates options from message to avoid parsing issues)
-    opencode_output=$(opencode run --format json \
-        --model "$full_model" \
-        --file "$TODO_FILE" \
-        --file "$PROGRESS_FILE" \
-        -- "$prompt" 2>"$opencode_stderr") || CLAUDE_EXIT_CODE=$?
+        # Stop timer before logging so messages aren't overwritten
+        stop_timer
 
-    if [[ $CLAUDE_EXIT_CODE -ne 0 ]]; then
-        log_stderr_file "$opencode_stderr" "error"
-    else
-        rm -f "$opencode_stderr"
-    fi
+        # Log the failure
+        if [[ $attempt -lt $MAX_RETRIES ]]; then
+            log_warn "Attempt $attempt/$MAX_RETRIES failed (exit code $CLAUDE_EXIT_CODE), retrying in ${backoff}s..."
+            log_stderr_file "$opencode_stderr" "warn"
+            sleep $backoff
+            # Check if interrupted during sleep
+            if [[ "$INTERRUPTED" == true ]]; then
+                return 1
+            fi
+            backoff=$((backoff * 2))  # Exponential backoff
+            # Restart timer for next attempt
+            start_timer
+        else
+            # Final attempt failed
+            log_error "All $MAX_RETRIES attempts failed"
+            log_error "OpenCode CLI failed with exit code $CLAUDE_EXIT_CODE"
+            log_stderr_file "$opencode_stderr" "error"
+        fi
+
+        attempt=$((attempt + 1))
+    done
 }
 
 # =============================================================================
@@ -541,6 +579,38 @@ trap 'on_interrupt' SIGINT SIGTERM
 # METRICS FUNCTIONS
 # =============================================================================
 
+# Finalize iteration metrics after CLI-specific token extraction
+# Called by both extract_iteration_metrics() and extract_iteration_metrics_opencode()
+# Requires: ITERATION_* token variables already set by caller
+# Sets: ITERATION_FILES_CHANGED, ITERATION_SUCCESS
+# Updates: TOTAL_* aggregates, INTERACTION_COUNT
+finalize_iteration_metrics() {
+    # Calculate total tokens
+    ITERATION_TOTAL_TOKENS=$((ITERATION_INPUT_TOKENS + ITERATION_OUTPUT_TOKENS))
+
+    # Calculate files changed (count all modified and untracked files in git)
+    ITERATION_FILES_CHANGED=$(git status --porcelain 2>/dev/null | wc -l)
+
+    # Determine success status
+    ITERATION_SUCCESS="true"
+    if [[ $CLAUDE_EXIT_CODE -ne 0 ]]; then
+        ITERATION_SUCCESS="false"
+    fi
+
+    # Append to metrics log (JSONL format)
+    append_metrics_log
+
+    # Update running totals
+    TOTAL_DURATION=$((TOTAL_DURATION + ITERATION_DURATION))
+    TOTAL_INPUT_TOKENS=$((TOTAL_INPUT_TOKENS + ITERATION_INPUT_TOKENS))
+    TOTAL_OUTPUT_TOKENS=$((TOTAL_OUTPUT_TOKENS + ITERATION_OUTPUT_TOKENS))
+    TOTAL_FILES_CHANGED=$((TOTAL_FILES_CHANGED + ITERATION_FILES_CHANGED))
+    INTERACTION_COUNT=$((INTERACTION_COUNT + 1))
+}
+
+# Extract metrics from Claude JSON output
+# Parameters: json_output, start_time
+# Sets: ITERATION_* globals
 extract_iteration_metrics() {
     local json="$1"
     local start_time="$2"
@@ -574,31 +644,14 @@ extract_iteration_metrics() {
     ITERATION_OUTPUT_TOKENS=$(echo "$metrics_json" | jq -r '.output_tokens')
     ITERATION_CACHE_CREATE_TOKENS=$(echo "$metrics_json" | jq -r '.cache_create_tokens')
     ITERATION_CACHE_READ_TOKENS=$(echo "$metrics_json" | jq -r '.cache_read_tokens')
-    ITERATION_TOTAL_TOKENS=$((ITERATION_INPUT_TOKENS + ITERATION_OUTPUT_TOKENS))
 
-    # Calculate files changed (count all modified and untracked files in git)
-    ITERATION_FILES_CHANGED=$(git status --porcelain 2>/dev/null | wc -l)
-
-    # Determine success status
-    ITERATION_SUCCESS="true"
-    if [[ $CLAUDE_EXIT_CODE -ne 0 ]]; then
-        ITERATION_SUCCESS="false"
-    fi
-
-    # Append to metrics log (JSONL format)
-    append_metrics_log
-
-    # Update running totals
-    TOTAL_DURATION=$((TOTAL_DURATION + ITERATION_DURATION))
-    TOTAL_INPUT_TOKENS=$((TOTAL_INPUT_TOKENS + ITERATION_INPUT_TOKENS))
-    TOTAL_OUTPUT_TOKENS=$((TOTAL_OUTPUT_TOKENS + ITERATION_OUTPUT_TOKENS))
-    TOTAL_FILES_CHANGED=$((TOTAL_FILES_CHANGED + ITERATION_FILES_CHANGED))
-    INTERACTION_COUNT=$((INTERACTION_COUNT + 1))
+    # Finalize with common logic
+    finalize_iteration_metrics
 }
 
 # Extract metrics from OpenCode JSONL output
 # Parameters: jsonl_output, start_time
-# Sets the same ITERATION_* globals as extract_iteration_metrics()
+# Sets: ITERATION_* globals (same as extract_iteration_metrics)
 extract_iteration_metrics_opencode() {
     local jsonl="$1"
     local start_time="$2"
@@ -621,22 +674,9 @@ extract_iteration_metrics_opencode() {
     ITERATION_OUTPUT_TOKENS=$(echo "$token_data" | jq -r '.output')
     ITERATION_CACHE_CREATE_TOKENS=$(echo "$token_data" | jq -r '.cache_write')
     ITERATION_CACHE_READ_TOKENS=$(echo "$token_data" | jq -r '.cache_read')
-    ITERATION_TOTAL_TOKENS=$((ITERATION_INPUT_TOKENS + ITERATION_OUTPUT_TOKENS))
 
-    ITERATION_FILES_CHANGED=$(git status --porcelain 2>/dev/null | wc -l)
-
-    ITERATION_SUCCESS="true"
-    if [[ $CLAUDE_EXIT_CODE -ne 0 ]]; then
-        ITERATION_SUCCESS="false"
-    fi
-
-    append_metrics_log
-
-    TOTAL_DURATION=$((TOTAL_DURATION + ITERATION_DURATION))
-    TOTAL_INPUT_TOKENS=$((TOTAL_INPUT_TOKENS + ITERATION_INPUT_TOKENS))
-    TOTAL_OUTPUT_TOKENS=$((TOTAL_OUTPUT_TOKENS + ITERATION_OUTPUT_TOKENS))
-    TOTAL_FILES_CHANGED=$((TOTAL_FILES_CHANGED + ITERATION_FILES_CHANGED))
-    INTERACTION_COUNT=$((INTERACTION_COUNT + 1))
+    # Finalize with common logic
+    finalize_iteration_metrics
 }
 
 # Extract result text from OpenCode JSONL output
@@ -900,6 +940,7 @@ if [[ -z "${1:-}" ]]; then
 fi
 
 PLAN_DIR="${1%/}"  # Remove trailing slash if present
+PLAN_NAME="$(basename "$PLAN_DIR")"
 ITERATIONS=${2:-}
 INFINITE_MODE=false
 
@@ -974,17 +1015,9 @@ echo ""
 # FILE SETUP
 # =============================================================================
 
-# Verify we can write to progress file
-if ! touch "$PROGRESS_FILE" 2>/dev/null; then
-    log_error "Cannot write to progress file: $PROGRESS_FILE"
-    exit 1
-fi
-
-# Verify we can write to metrics file
-if ! touch "$METRICS_LOG" 2>/dev/null; then
-    log_error "Cannot write to metrics file: $METRICS_LOG"
-    exit 1
-fi
+# Verify we can write to required files
+check_file_writable "$PROGRESS_FILE" "progress file"
+check_file_writable "$METRICS_LOG" "metrics file"
 
 # =============================================================================
 # MAIN LOOP
@@ -1060,7 +1093,7 @@ while true; do
     fi
 
     # Display interaction result with phase separator
-    echo "--- Claude Output ---"
+    echo "--- ${SELECTED_CLI^} Output ---"
     echo "$result"
     echo ""
 
