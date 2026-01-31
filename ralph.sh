@@ -895,7 +895,9 @@ fi
 # Set file paths
 TODO_FILE="$PLAN_DIR/TODO.md"
 PROGRESS_FILE="$PLAN_DIR/progress.txt"
-METRICS_LOG="$PLAN_DIR/ralph_metrics.jsonl"
+# Create metrics filename with timestamp and model
+METRICS_TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+METRICS_LOG="$PLAN_DIR/${METRICS_TIMESTAMP}_${REQUESTED_MODEL}_ralph_metrics.jsonl"
 
 # Validate and configure iteration mode
 if [[ -z "$ITERATIONS" ]]; then
