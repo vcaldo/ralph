@@ -299,14 +299,14 @@ commit_changes() {
     fi
 }
 
-# Extract task name from the most recent progress entry
-# Returns the task name or empty string if not found
-extract_task_from_progress() {
-    local progress_file="$1"
-    # Look for most recent "Task:" line in the last 50 lines of progress file
-    # tac reverses lines so grep -m 1 finds the newest entry first
+# Extract commit message from Claude's response
+# Returns the commit message or empty string if not found
+extract_commit_message() {
+    local result="$1"
+    # Extract content between <commit> and </commit> tags
+    # Use grep -oP for Perl regex with lookbehind/lookahead
     # Use || true to prevent set -e from exiting when grep finds no match
-    tail -50 "$progress_file" 2>/dev/null | tac | grep -m 1 -i '^Task:' | sed 's/^[Tt]ask:[[:space:]]*//' || true
+    echo "$result" | grep -oP '(?<=<commit>).*(?=</commit>)' | tail -1 || true
 }
 
 # Call Claude API with the standard prompt
@@ -346,6 +346,8 @@ Guidelines:
    - Task name
    - What was accomplished
    - Next steps (if any)
+5. At the END of your response, output a commit message for your changes:
+   <commit>Brief description of changes (imperative mood, under 72 chars)</commit>
 
 IMPORTANT: Only work on a SINGLE task per iteration.
 
@@ -833,8 +835,8 @@ while true; do
     # Extract and log metrics
     extract_iteration_metrics "$claude_json" "$ITERATION_START"
 
-    # Extract task name from progress file (Claude writes "Task:" line)
-    COMMIT_MSG=$(extract_task_from_progress "$PROGRESS_FILE")
+    # Extract commit message from Claude's response
+    COMMIT_MSG=$(extract_commit_message "$result")
     if [[ -z "$COMMIT_MSG" ]]; then
         COMMIT_MSG="Ralph: iteration $CURRENT_ITERATION"
     fi

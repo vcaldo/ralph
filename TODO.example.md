@@ -36,9 +36,10 @@ Ralph will:
 **IMPORTANT SAFETY RULES:**
 - ❌ **DO NOT** deploy touch production
 - ❌ **DO NOT** run production-related make targets
+- ❌ **DO NOT** touch production data
 - ✅ **OK** to deploy to local dev environment
 - ✅ **OK** to change data in dev environment
-- ✅ **OK** to run other development commands (go run, npm, etc.)
+- ✅ **OK** to run other development commands
 
 Tips:
 - Keep task descriptions clear and actionable
