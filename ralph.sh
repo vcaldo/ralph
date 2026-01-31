@@ -919,6 +919,10 @@ else
     log_info "Iterations: $ITERATIONS"
 fi
 log_info "Model: $REQUESTED_MODEL"
+log_info "CLI: $SELECTED_CLI"
+if [[ "$SELECTED_CLI" == "opencode" ]]; then
+    log_info "Provider: $OPENCODE_PROVIDER"
+fi
 log_info "TODO file: $TODO_FILE"
 log_info "Progress file: $PROGRESS_FILE"
 log_info "Metrics file: $METRICS_LOG"
