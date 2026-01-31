@@ -20,6 +20,11 @@ readonly NC='\033[0m' # No Color
 # Spinner characters for progress display
 readonly SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 
+# Retry configuration
+readonly MAX_RETRIES=3
+readonly INITIAL_BACKOFF_SECONDS=5
+readonly CLAUDE_TIMEOUT_SECONDS=600  # 10 minute timeout per attempt
+
 # --- Configuration (set once via CLI flags or defaults) ---
 # Model configuration
 REQUESTED_MODEL="opus"     # Configurable via --model flag, defaults to opus
@@ -275,13 +280,22 @@ extract_task_from_progress() {
 }
 
 # Call Claude API with the standard prompt
+# Includes retry logic with exponential backoff and timeout
 # Sets globals: claude_json, CLAUDE_EXIT_CODE
-# Uses globals: REQUESTED_MODEL, TODO_FILE, PROGRESS_FILE
+# Uses globals: REQUESTED_MODEL, TODO_FILE, PROGRESS_FILE, MAX_RETRIES, INITIAL_BACKOFF_SECONDS, CLAUDE_TIMEOUT_SECONDS
 call_claude_api() {
+    local attempt=1
+    local backoff=$INITIAL_BACKOFF_SECONDS
     local claude_stderr
-    claude_stderr=$(mktemp)
 
-    claude_json=$(claude --output-format json --model "$REQUESTED_MODEL" --permission-mode bypassPermissions -p "Find the highest-priority task from the TODO file and work only on that task.
+    while [ $attempt -le $MAX_RETRIES ]; do
+        claude_stderr=$(mktemp)
+        CLAUDE_EXIT_CODE=0
+        claude_json=""
+
+        # Run claude with timeout (if available)
+        if command -v timeout &> /dev/null; then
+            claude_json=$(timeout "$CLAUDE_TIMEOUT_SECONDS" claude --output-format json --model "$REQUESTED_MODEL" --permission-mode bypassPermissions -p "Find the highest-priority task from the TODO file and work only on that task.
 
 Here are the current TODO items and progress:
 
@@ -303,17 +317,67 @@ IMPORTANT: Only work on a SINGLE task per iteration.
 
 If, while working on the task, you determine ALL tasks are complete, output exactly this:
 <promise>COMPLETE</promise>" 2>"$claude_stderr") || CLAUDE_EXIT_CODE=$?
+        else
+            # Fallback: run without timeout if 'timeout' command unavailable
+            claude_json=$(claude --output-format json --model "$REQUESTED_MODEL" --permission-mode bypassPermissions -p "Find the highest-priority task from the TODO file and work only on that task.
 
-    # If claude failed, show the error
-    if [[ $CLAUDE_EXIT_CODE -ne 0 ]]; then
-        log_error "Claude CLI failed with exit code $CLAUDE_EXIT_CODE"
-        if [[ -s "$claude_stderr" ]]; then
-            log_error "Error output:"
-            cat "$claude_stderr" >&2
+Here are the current TODO items and progress:
+
+@$TODO_FILE
+
+@$PROGRESS_FILE
+
+Guidelines:
+1. Pick ONE task from the TODO file that you determine has the highest priority
+2. Work ONLY on that task - do not work on multiple tasks
+3. Update the TODO file by marking the task as complete (change [ ] to [x]) or updating its status
+4. After completing the task, append your progress to the progress file (@$PROGRESS_FILE) with this format:
+   - Current date/time
+   - Task name
+   - What was accomplished
+   - Next steps (if any)
+
+IMPORTANT: Only work on a SINGLE task per iteration.
+
+If, while working on the task, you determine ALL tasks are complete, output exactly this:
+<promise>COMPLETE</promise>" 2>"$claude_stderr") || CLAUDE_EXIT_CODE=$?
         fi
-    fi
 
-    rm -f "$claude_stderr"
+        # Success - clean up and return
+        if [[ $CLAUDE_EXIT_CODE -eq 0 ]]; then
+            rm -f "$claude_stderr"
+            return 0
+        fi
+
+        # Determine error type for logging
+        local error_type="error"
+        if [[ $CLAUDE_EXIT_CODE -eq 124 ]]; then
+            error_type="timeout after ${CLAUDE_TIMEOUT_SECONDS}s"
+        fi
+
+        # Log the failure
+        if [[ $attempt -lt $MAX_RETRIES ]]; then
+            log_warn "Attempt $attempt/$MAX_RETRIES failed ($error_type), retrying in ${backoff}s..."
+            if [[ -s "$claude_stderr" ]]; then
+                log_warn "Error output:"
+                cat "$claude_stderr" >&2
+            fi
+            rm -f "$claude_stderr"
+            sleep $backoff
+            backoff=$((backoff * 2))  # Exponential backoff
+        else
+            # Final attempt failed
+            log_error "All $MAX_RETRIES attempts failed"
+            log_error "Claude CLI failed with exit code $CLAUDE_EXIT_CODE ($error_type)"
+            if [[ -s "$claude_stderr" ]]; then
+                log_error "Error output:"
+                cat "$claude_stderr" >&2
+            fi
+            rm -f "$claude_stderr"
+        fi
+
+        attempt=$((attempt + 1))
+    done
 }
 
 # =============================================================================
