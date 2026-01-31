@@ -989,7 +989,12 @@ while true; do
 
     echo "Running $REQUESTED_MODEL..."
     start_timer
-    call_claude_api
+    # Dispatch API call based on selected CLI (claude or opencode)
+    if [[ "${SELECTED_CLI:-claude}" == "opencode" ]]; then
+        call_opencode_api
+    else
+        call_claude_api
+    fi
     stop_timer
 
     # Check if interrupted - exit gracefully
@@ -1003,11 +1008,16 @@ while true; do
         exit 1
     fi
 
-    # Extract text content from JSON for completion check and display
-    result=$(jq -r '.result // ""' <<< "$claude_json")
-
-    # Extract and log metrics
-    extract_iteration_metrics "$claude_json" "$ITERATION_START"
+    # Extract text content and metrics depending on which CLI was used
+    if [[ "${SELECTED_CLI:-claude}" == "opencode" ]]; then
+        # For OpenCode, metrics and text are taken from opencode_output
+        result=$(extract_result_opencode "$opencode_output")
+        extract_iteration_metrics_opencode "$opencode_output" "$ITERATION_START"
+    else
+        # For Claude, use existing JSON handling
+        result=$(jq -r '.result // ""' <<< "$claude_json")
+        extract_iteration_metrics "$claude_json" "$ITERATION_START"
+    fi
 
     # Extract commit message from Claude's response
     COMMIT_MSG=$(extract_commit_message "$result")
