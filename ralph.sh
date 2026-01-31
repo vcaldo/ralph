@@ -279,7 +279,8 @@ extract_task_from_progress() {
     local progress_file="$1"
     # Look for most recent "Task:" line in the last 50 lines of progress file
     # tac reverses lines so grep -m 1 finds the newest entry first
-    tail -50 "$progress_file" 2>/dev/null | tac | grep -m 1 -i '^Task:' | sed 's/^[Tt]ask:[[:space:]]*//'
+    # Use || true to prevent set -e from exiting when grep finds no match
+    tail -50 "$progress_file" 2>/dev/null | tac | grep -m 1 -i '^Task:' | sed 's/^[Tt]ask:[[:space:]]*//' || true
 }
 
 # Call Claude API with the standard prompt
