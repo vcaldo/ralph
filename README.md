@@ -4,7 +4,7 @@ Ralph is an automation workflow that uses Claude to systematically work through 
 
 **TL;DR:**
 ```bash
-# Install dependencies
+# Install dependencies (Claude CLI)
 npm install -g @anthropic-ai/claude-code
 brew install jq  # or: apt install jq
 
@@ -18,6 +18,10 @@ cp TODO.example.md plans/my-feature/TODO.md
 ./ralph.sh plans/my-feature/          # Run until complete (unlimited)
 # OR
 ./ralph.sh plans/my-feature/ 999      # Run max 999 iterations
+
+# Using OpenCode instead of Claude CLI
+go install github.com/opencode-ai/opencode@latest
+./ralph.sh --cli opencode plans/my-feature/
 ```
 ---
 
@@ -110,10 +114,60 @@ Ralph follows a simple loop:
 
 ## Requirements
 
-- [Claude CLI](https://docs.anthropic.com/claude-code) installed and configured
+- [Claude CLI](https://docs.anthropic.com/claude-code) installed and configured **OR** [OpenCode CLI](https://github.com/opencode-ai/opencode)
 - Git with user identity configured
 - `jq` for JSON processing
 - Bash shell
+
+## Using OpenCode
+
+Ralph supports [OpenCode](https://github.com/opencode-ai/opencode) as an alternative CLI to Claude Code.
+
+### Installation
+
+```bash
+go install github.com/opencode-ai/opencode@latest
+```
+
+### Usage
+
+Use the `--cli` flag or set the `RALPH_CLI` environment variable:
+
+```bash
+# Using the --cli flag
+./ralph.sh --cli opencode plans/my-feature/
+
+# Or using environment variable
+export RALPH_CLI=opencode
+./ralph.sh plans/my-feature/
+```
+
+### Provider Selection
+
+OpenCode supports multiple providers. Use `--provider` to select one:
+
+```bash
+# Use Anthropic API directly (default)
+./ralph.sh --cli opencode --provider anthropic plans/my-feature/
+
+# Use GitHub Copilot as the provider
+./ralph.sh --cli opencode --provider github-copilot plans/my-feature/
+```
+
+### Model Selection
+
+Models work the same way with both CLIs:
+
+```bash
+./ralph.sh --cli opencode --model sonnet plans/my-feature/
+./ralph.sh --cli opencode --model haiku plans/my-feature/
+./ralph.sh --cli opencode --model opus plans/my-feature/  # default
+```
+
+Model names are translated automatically:
+- `opus` → `claude-opus-4-5`
+- `sonnet` → `claude-sonnet-4-5`
+- `haiku` → `claude-haiku-4-5`
 
 ## Learn More
 
