@@ -1,0 +1,178 @@
+## 2026-01-31 - Task 1: Add configuration variables for CLI selection
+
+### Accomplished:
+- Added `SELECTED_CLI="claude"` configuration variable in the CONFIGURATION section of ralph.sh (after line 33)
+- Added `OPENCODE_PROVIDER="anthropic"` configuration variable in the CONFIGURATION section of ralph.sh
+- Both variables are placed in the "Configuration (set once via CLI flags or defaults)" section as specified
+
+### Next steps:
+- Task 2: Add --cli flag parsing (in argument parsing section around line 663)
+
+---
+
+## 2026-01-31 - Task 2: Add --cli flag parsing
+
+### Accomplished:
+- Added `SELECTED_CLI="${RALPH_CLI:-claude}"` at the start of the argument parsing section (line 665) to check for RALPH_CLI environment variable
+- Added new `--cli)` case in the argument parsing while loop (lines 686-701)
+- Implemented validation to accept only `claude` or `opencode` values
+- Added appropriate error messages for invalid values
+- Followed the existing `--model)` case structure for consistency
+
+### Next steps:
+- Task 3: Add --provider flag parsing (in argument parsing section)
+
+---
+
+## 2026-01-31 - Task 3: Add --provider flag parsing
+
+### Accomplished:
+- Added new `--provider)` case in the argument parsing while loop (after the --cli case)
+- Implemented validation to accept only `anthropic` or `github-copilot` values
+- Set `OPENCODE_PROVIDER` to the provided value
+- Added appropriate error messages for invalid values
+- Followed the existing `--cli)` and `--model)` case structure for consistency
+
+### Next steps:
+- Task 4: Add get_opencode_model() function (after format_duration() around line 227)
+
+---
+
+## 2026-01-31 - Task 4: Add get_opencode_model() function
+
+### Accomplished:
+- Added `get_opencode_model()` function after `format_duration()` function (inserted at line 231)
+- Function translates ralph model names (opus|sonnet|haiku) to OpenCode format
+- Implements conditional formatting based on OPENCODE_PROVIDER (anthropic vs github-copilot)
+- Handles the github-copilot provider's use of dots instead of dashes (e.g., "claude-opus-4-5" becomes "claude-opus.4.5")
+- Returns full model string in format "{provider}/{model}" (e.g., "anthropic/claude-opus-4-5")
+
+### Next steps:
+- Task 5: Add call_opencode_api() function (after call_claude_api() around line 403)
+
+---
+
+## 2026-01-31 - Task 5: Add call_opencode_api() function
+
+### Accomplished:
+- Added `call_opencode_api()` function after `call_claude_api()` function (inserted after line 427)
+- Function calls OpenCode API with the standard prompt (same as Claude prompt)
+- Uses `get_opencode_model()` to translate ralph model names to OpenCode format
+- Sets globals: `opencode_output` and `CLAUDE_EXIT_CODE` (reused for consistency)
+- Properly handles error cases and logs stderr output
+- Minimal implementation without retry logic (as OpenCode does not support retry in the same way)
+- Returns output in JSON format via `opencode_output` global variable
+
+### Next steps:
+- Task 6: Add extract_iteration_metrics_opencode() function (after extract_iteration_metrics())
+
+---
+
+## 2026-01-31 - Task 6: Add extract_iteration_metrics_opencode() function
+
+### Accomplished:
+- Added `extract_iteration_metrics_opencode()` function after `extract_iteration_metrics()` function (inserted after line 576)
+- Function extracts metrics from OpenCode JSONL output format
+- Parses JSONL and aggregates token counts from step_finish events
+- Sets all ITERATION_* globals consistently with the Claude metrics function
+- Properly handles token parsing for input, output, cache_read, and cache_write
+- Calculates files changed using git status (same as Claude version)
+- Updates running totals and interaction count (TOTAL_DURATION, TOTAL_INPUT_TOKENS, etc.)
+- Calls `append_metrics_log()` to record metrics in JSONL format
+
+### Next steps:
+- Task 7: Add extract_result_opencode() function (helper to extract text from OpenCode JSONL)
+
+---
+
+## 2026-01-31 - Task 7: Add extract_result_opencode() function
+
+### Accomplished:
+- Added `extract_result_opencode()` function after `extract_iteration_metrics_opencode()` function (inserted after line 619)
+- Function extracts result text from OpenCode JSONL output
+- Uses jq to filter text type entries and concatenate their content
+- Includes error handling that returns empty string if jq parsing fails
+- Follows the same pattern as other helper functions in the script
+
+### Next steps:
+- Task 8: Update check_dependencies() for CLI selection
+
+---
+
+## 2026-01-31 - Task 8: Update check_dependencies() for CLI selection
+
+### Accomplished:
+- Modified `check_dependencies()` function (lines 176-189) to conditionally check for the selected CLI
+- Added conditional logic: if `SELECTED_CLI == "opencode"`, check for `opencode` binary; otherwise check for `claude` binary
+- Added proper install instructions for opencode: `go install github.com/opencode-ai/opencode@latest`
+- Maintained existing claude install instructions for the default case
+- Ensures the function validates the correct CLI is installed based on the user's CLI selection
+
+### Next steps:
+- Task 9: Update main loop to dispatch based on CLI
+
+---
+
+## 2026-01-31 - Task 9: Update main loop to dispatch based on CLI
+
+### Accomplished:
+- Modified the main loop (lines 987-1007) to conditionally dispatch based on `SELECTED_CLI`
+- Added conditional logic before API call: if `SELECTED_CLI == "opencode"`, call `call_opencode_api`; otherwise call `call_claude_api`
+- Updated the metrics extraction logic to use appropriate functions:
+  - For OpenCode: use `extract_iteration_metrics_opencode()` and `extract_result_opencode()`
+  - For Claude: use `extract_iteration_metrics()` and `jq` to extract result
+- Both paths properly set the `result` variable for downstream processing
+- Maintains all existing error handling and interrupt checking
+
+### Next steps:
+- Task 10: Update help/usage text
+
+---
+
+## 2026-01-31 - Task 10: Update help/usage text
+
+### Accomplished:
+- Updated the usage text in the argument parsing error section (lines 858-872 in ralph.sh)
+- Added `--cli CLI` option description: "CLI to use: claude or opencode (default: claude, env: RALPH_CLI)"
+- Added `--provider PROV` option description: "OpenCode provider: anthropic or github-copilot (default: anthropic)"
+- Added three new usage examples demonstrating:
+  - Running with OpenCode CLI
+  - Using RALPH_CLI environment variable
+  - Specifying a provider with the --provider flag
+- All changes align with the specification in the TODO file
+- No other code was modified
+
+### Next steps:
+- Task 11: Update startup info log
+
+---
+
+## 2026-01-31 - Task 11: Update startup info log
+
+### Accomplished:
+- Updated the log_info section in ralph.sh (around line 921)
+- Added `log_info "CLI: $SELECTED_CLI"` after the "Model:" line
+- Added conditional logic to print `log_info "Provider: $OPENCODE_PROVIDER"` when `SELECTED_CLI == "opencode"`
+- Both changes ensure the startup output displays the CLI selection and provider information
+- No other code was modified
+
+### Next steps:
+- Task 12: Run shellcheck validation
+
+---
+
+## 2026-01-31 - Task 12: Run shellcheck validation
+
+### Accomplished:
+- Ran `shellcheck ralph.sh` to identify any warnings or errors
+- Verified that no new errors or warnings were introduced by the OpenCode implementation tasks (Tasks 1-11)
+- All new functions (`get_opencode_model()`, `call_opencode_api()`, `extract_iteration_metrics_opencode()`, `extract_result_opencode()`) use correct bash syntax:
+  - Use `[[ ]]` for conditionals (not `[ ]`)
+  - Use `==` for string comparisons in `[[ ]]` (not `=`)
+  - All variables are properly quoted
+- The shellcheck warnings found are pre-existing SC2155 warnings (declare and assign separately) in other parts of the script, not related to OpenCode changes
+- All OpenCode implementation code follows best practices and passes validation
+
+### Next steps:
+- All high-priority and medium-priority tasks complete
+- Next: User Tests (Manual Verification) - Tasks A-E in the TODO file
