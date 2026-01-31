@@ -477,8 +477,8 @@ extract_iteration_metrics() {
     ITERATION_CACHE_READ_TOKENS=$(echo "$metrics_json" | jq -r '.cache_read_tokens')
     ITERATION_TOTAL_TOKENS=$((ITERATION_INPUT_TOKENS + ITERATION_OUTPUT_TOKENS))
 
-    # Calculate files changed (count modified files in git)
-    ITERATION_FILES_CHANGED=$(git diff --name-only HEAD 2>/dev/null | wc -l)
+    # Calculate files changed (count all modified and untracked files in git)
+    ITERATION_FILES_CHANGED=$(git status --porcelain 2>/dev/null | wc -l)
 
     # Determine success status
     ITERATION_SUCCESS="true"
