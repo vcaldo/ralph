@@ -859,6 +859,8 @@ if [[ -z "${1:-}" ]]; then
     echo ""
     echo "Options:"
     echo "  --model MODEL          Specify which model to use (haiku, sonnet, or opus). Default: opus"
+    echo "  --cli CLI              CLI to use: claude or opencode (default: claude, env: RALPH_CLI)"
+    echo "  --provider PROV        OpenCode provider: anthropic or github-copilot (default: anthropic)"
     echo ""
     echo "Arguments:"
     echo "  plan-dir               Directory containing the plan (must have TODO.md)"
@@ -868,6 +870,9 @@ if [[ -z "${1:-}" ]]; then
     echo "  $0 plans/arena-v2/                 # Run until complete (unlimited)"
     echo "  $0 plans/arena-v2/ 10              # Run max 10 iterations using opus"
     echo "  $0 --model sonnet plans/arena-v2/  # Run until complete using sonnet"
+    echo "  $0 --cli opencode plans/arena-v2/                    # Run with OpenCode"
+    echo "  RALPH_CLI=opencode $0 plans/arena-v2/                # Use env var"
+    echo "  $0 --cli opencode --provider github-copilot plans/arena-v2/"
     exit 1
 fi
 
