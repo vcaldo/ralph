@@ -350,6 +350,7 @@ Guidelines:
    <commit>Brief description of changes (imperative mood, under 72 chars)</commit>
 
 IMPORTANT: Only work on a SINGLE task per iteration.
+IMPORTANT: NEVER delete the TODO file - only edit it to mark tasks complete.
 
 If, while working on the task, you determine ALL tasks are complete, output exactly this:
 <promise>COMPLETE</promise>"
