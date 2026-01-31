@@ -31,7 +31,8 @@ readonly SEPARATOR="=================================================="
 # --- Configuration (set once via CLI flags or defaults) ---
 # Model configuration
 REQUESTED_MODEL="opus"     # Configurable via --model flag, defaults to opus
-SELECTED_CLI="claude"     # CLI to use: claude or opencode
+# Allow overriding selected CLI via environment variable RALPH_CLI
+SELECTED_CLI="${RALPH_CLI:-claude}"     # CLI to use: claude or opencode
 OPENCODE_PROVIDER="anthropic"  # OpenCode provider when using opencode
 
 # --- Global state (modified during execution) ---
@@ -674,6 +675,38 @@ while [[ "${1:-}" == --* ]]; do
                     REQUESTED_MODEL="$2"
                     shift 2
                     ;;
+        --provider)
+            if [[ -z "${2:-}" ]] || [[ "${2:-}" == --* ]]; then
+                log_error "--provider requires an argument (anthropic|github-copilot)"
+                exit 1
+            fi
+            case "$2" in
+                anthropic|github-copilot)
+                    OPENCODE_PROVIDER="$2"
+                    shift 2
+                    ;;
+                *)
+                    log_error "Invalid provider: $2 (must be anthropic or github-copilot)"
+                    exit 1
+                    ;;
+            esac
+            ;;
+        --cli)
+            if [[ -z "${2:-}" ]] || [[ "${2:-}" == --* ]]; then
+                log_error "--cli requires an argument (claude|opencode)"
+                exit 1
+            fi
+            case "$2" in
+                claude|opencode)
+                    SELECTED_CLI="$2"
+                    shift 2
+                    ;;
+                *)
+                    log_error "Invalid CLI: $2 (must be claude or opencode)"
+                    exit 1
+                    ;;
+            esac
+            ;;
                 *)
                     log_error "Invalid model: $2 (must be haiku, sonnet, or opus)"
                     exit 1
@@ -692,6 +725,8 @@ if [[ -z "${1:-}" ]]; then
     echo ""
     echo "Options:"
     echo "  --model MODEL          Specify which model to use (haiku, sonnet, or opus). Default: opus"
+    echo "  --cli CLI              CLI to use: claude or opencode (default: claude, env: RALPH_CLI)"
+    echo "  --provider PROV        OpenCode provider: anthropic or github-copilot (default: anthropic)"
     echo ""
     echo "Arguments:"
     echo "  plan-dir               Directory containing the plan (must have TODO.md)"
