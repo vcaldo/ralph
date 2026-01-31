@@ -228,6 +228,29 @@ format_duration() {
     printf "%dm %02ds" "$minutes" "$seconds"
 }
 
+# Translate ralph model name to OpenCode format
+# Parameters: model (opus|sonnet|haiku)
+# Uses: OPENCODE_PROVIDER
+# Returns: Full model name (e.g., "anthropic/claude-opus-4-5")
+get_opencode_model() {
+    local model="$1"
+    local suffix
+    case "$model" in
+        opus) suffix="claude-opus-4-5" ;;
+        sonnet) suffix="claude-sonnet-4-5" ;;
+        haiku) suffix="claude-haiku-4-5" ;;
+        *) suffix="claude-opus-4-5" ;;
+    esac
+
+    # Adjust format based on provider
+    if [[ "$OPENCODE_PROVIDER" == "github-copilot" ]]; then
+        # github-copilot uses dots instead of dashes
+        suffix="${suffix//-4-5/.4.5}"
+    fi
+
+    echo "${OPENCODE_PROVIDER}/${suffix}"
+}
+
 # Calculate cache hit rate percentage
 # Parameters: cache_read_tokens, input_tokens
 # Returns: "N/A" if no input tokens, or "XX%" format
