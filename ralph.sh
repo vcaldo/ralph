@@ -982,10 +982,11 @@ if [[ ! -f "$PLAN_DIR/TODO.md" ]]; then
 fi
 
 # Set file paths
-TODO_FILE="$PLAN_DIR/TODO.md"
-PROGRESS_FILE="$PLAN_DIR/progress.txt"
-# Create metrics filename with timestamp and model
+# Create timestamp first (used for all run-specific files)
 METRICS_TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+TODO_FILE="$PLAN_DIR/TODO.md"
+TODO_SNAPSHOT="$PLAN_DIR/${METRICS_TIMESTAMP}_${REQUESTED_MODEL}_TODO.md"
+PROGRESS_FILE="$PLAN_DIR/${METRICS_TIMESTAMP}_${REQUESTED_MODEL}_progress.txt"
 METRICS_LOG="$PLAN_DIR/${METRICS_TIMESTAMP}_${REQUESTED_MODEL}_ralph_metrics.jsonl"
 
 # Validate and configure iteration mode
@@ -1016,6 +1017,7 @@ else
     log_info "Model: $REQUESTED_MODEL"
 fi
 log_info "TODO file: $TODO_FILE"
+log_info "TODO snapshot: $TODO_SNAPSHOT"
 log_info "Progress file: $PROGRESS_FILE"
 log_info "Metrics file: $METRICS_LOG"
 echo ""
@@ -1048,6 +1050,11 @@ echo ""
 # Verify we can write to required files
 check_file_writable "$PROGRESS_FILE" "progress file"
 check_file_writable "$METRICS_LOG" "metrics file"
+check_file_writable "$TODO_SNAPSHOT" "TODO snapshot file"
+
+# Create TODO snapshot for this run
+cp "$TODO_FILE" "$TODO_SNAPSHOT"
+log_success "Created TODO snapshot: $(basename "$TODO_SNAPSHOT")"
 
 # =============================================================================
 # MAIN LOOP
