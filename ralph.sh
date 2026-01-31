@@ -122,7 +122,7 @@ start_timer() {
         local start_time=$TIMER_START_TIME
 
         while true; do
-            local now=$(date +%s)
+            local now; now=$(date +%s)
             local elapsed=$((now - start_time))
             local mins=$((elapsed / 60))
             local secs=$((elapsed % 60))
@@ -238,9 +238,9 @@ format_duration() {
 }
 
 # Translate ralph model name to OpenCode format
-# Parameters: model (opus|sonnet|haiku)
+# Parameters: model (opus|sonnet|haiku or arbitrary model name)
 # Uses: OPENCODE_PROVIDER, MODEL_EXPLICITLY_SET
-# Returns: Full model name (e.g., "anthropic/claude-opus-4-5" or "openrouter/glm-4-7-free")
+# Returns: Full model name (e.g., "anthropic/claude-opus-4-5" or "github-copilot/grok-code-fast-1")
 get_opencode_model() {
     local model="$1"
 
@@ -250,21 +250,26 @@ get_opencode_model() {
         return
     fi
 
-    local suffix
+    # Check if it's a Claude shorthand - translate to full name
     case "$model" in
-        opus) suffix="claude-opus-4-5" ;;
-        sonnet) suffix="claude-sonnet-4-5" ;;
-        haiku) suffix="claude-haiku-4-5" ;;
-        *) suffix="claude-opus-4-5" ;;
+        opus|sonnet|haiku)
+            local suffix
+            case "$model" in
+                opus) suffix="claude-opus-4-5" ;;
+                sonnet) suffix="claude-sonnet-4-5" ;;
+                haiku) suffix="claude-haiku-4-5" ;;
+            esac
+            # Adjust format based on provider
+            if [[ "$OPENCODE_PROVIDER" == "github-copilot" ]]; then
+                suffix="${suffix//-4-5/.4.5}"
+            fi
+            echo "${OPENCODE_PROVIDER}/${suffix}"
+            ;;
+        *)
+            # Arbitrary model name - just prepend provider
+            echo "${OPENCODE_PROVIDER}/${model}"
+            ;;
     esac
-
-    # Adjust format based on provider
-    if [[ "$OPENCODE_PROVIDER" == "github-copilot" ]]; then
-        # github-copilot uses dots instead of dashes
-        suffix="${suffix//-4-5/.4.5}"
-    fi
-
-    echo "${OPENCODE_PROVIDER}/${suffix}"
 }
 
 # Calculate cache hit rate percentage
@@ -478,12 +483,12 @@ IMPORTANT: NEVER delete the TODO file - only edit it to mark tasks complete.
 If, while working on the task, you determine ALL tasks are complete, output exactly this:
 <promise>COMPLETE</promise>"
 
-    # Run opencode
+    # Run opencode (-- separates options from message to avoid parsing issues)
     opencode_output=$(opencode run --format json \
         --model "$full_model" \
         --file "$TODO_FILE" \
         --file "$PROGRESS_FILE" \
-        "$prompt" 2>"$opencode_stderr") || CLAUDE_EXIT_CODE=$?
+        -- "$prompt" 2>"$opencode_stderr") || CLAUDE_EXIT_CODE=$?
 
     if [[ $CLAUDE_EXIT_CODE -ne 0 ]]; then
         log_stderr_file "$opencode_stderr" "error"
@@ -644,7 +649,7 @@ extract_result_opencode() {
 
 append_metrics_log() {
     # Get ISO 8601 timestamp
-    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local timestamp; timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
     # Build JSON object using jq for proper escaping
     jq -n \
@@ -684,10 +689,10 @@ append_metrics_log() {
 
 print_metrics_summary() {
     # Format duration (convert seconds to minutes:seconds)
-    local duration_str=$(format_duration "$ITERATION_DURATION")
+    local duration_str; duration_str=$(format_duration "$ITERATION_DURATION")
 
     # Calculate cache hit rate
-    local cache_hit_rate=$(calculate_cache_hit_rate "$ITERATION_CACHE_READ_TOKENS" "$ITERATION_INPUT_TOKENS")
+    local cache_hit_rate; cache_hit_rate=$(calculate_cache_hit_rate "$ITERATION_CACHE_READ_TOKENS" "$ITERATION_INPUT_TOKENS")
 
     # Status icon
     local status_icon="✓"
@@ -730,7 +735,7 @@ print_final_summary() {
         total_cache_read: (map(.usage.cache_read_tokens) | add // 0)
     }' "$METRICS_LOG" 2>/dev/null || echo '{"success_count":0,"min_duration":0,"max_duration":0,"total_cache_create":0,"total_cache_read":0}')
 
-    local success_count=$(echo "$aggregates" | jq -r '.success_count')
+    local success_count; success_count=$(echo "$aggregates" | jq -r '.success_count')
     local min_duration=$(echo "$aggregates" | jq -r '.min_duration')
     local max_duration=$(echo "$aggregates" | jq -r '.max_duration')
     local total_cache_create=$(echo "$aggregates" | jq -r '.total_cache_create')
@@ -809,20 +814,12 @@ while [[ "${1:-}" == --* ]]; do
     case "$1" in
         --model)
             if [[ -z "${2:-}" ]] || [[ "${2:-}" == --* ]]; then
-                log_error "--model requires an argument (haiku|sonnet|opus)"
+                log_error "--model requires an argument"
                 exit 1
             fi
-            case "$2" in
-                haiku|sonnet|opus)
-                    REQUESTED_MODEL="$2"
-                    MODEL_EXPLICITLY_SET=true
-                    shift 2
-                    ;;
-                *)
-                    log_error "Invalid model: $2 (must be haiku, sonnet, or opus)"
-                    exit 1
-                    ;;
-            esac
+            REQUESTED_MODEL="$2"
+            MODEL_EXPLICITLY_SET=true
+            shift 2
             ;;
         --cli)
             if [[ -z "${2:-}" ]] || [[ "${2:-}" == --* ]]; then
@@ -869,11 +866,23 @@ if [[ "$SELECTED_CLI" == "opencode" && -z "$OPENCODE_PROVIDER" ]]; then
     exit 1
 fi
 
+# Validate model for Claude CLI (only supports haiku, sonnet, opus)
+if [[ "$SELECTED_CLI" == "claude" ]]; then
+    case "$REQUESTED_MODEL" in
+        haiku|sonnet|opus) ;;
+        *)
+            log_error "Invalid model for Claude CLI: $REQUESTED_MODEL (must be haiku, sonnet, or opus)"
+            exit 1
+            ;;
+    esac
+fi
+
 if [[ -z "${1:-}" ]]; then
     log_error "Usage: $0 [options] <plan-dir> [iterations]"
     echo ""
     echo "Options:"
-    echo "  --model MODEL          Specify which model to use (haiku, sonnet, or opus). Default: opus"
+    echo "  --model MODEL          Model to use. Claude CLI: haiku, sonnet, opus (default: opus)"
+    echo "                         OpenCode: any model name (e.g., grok-code-fast-1, gpt-5.2-codex)"
     echo "  --cli CLI              CLI to use: claude or opencode (default: claude, env: RALPH_CLI)"
     echo "  --provider PROV        OpenCode provider: anthropic, github-copilot, or openrouter (required for opencode)"
     echo ""
@@ -886,7 +895,7 @@ if [[ -z "${1:-}" ]]; then
     echo "  $0 plans/arena-v2/ 10              # Run max 10 iterations using opus"
     echo "  $0 --model sonnet plans/arena-v2/  # Run until complete using sonnet"
     echo "  $0 --cli opencode --provider openrouter plans/arena-v2/  # OpenCode with GLM-4.7 free"
-    echo "  $0 --cli opencode --provider anthropic --model opus plans/arena-v2/"
+    echo "  $0 --cli opencode --provider github-copilot --model grok-code-fast-1 plans/arena-v2/"
     exit 1
 fi
 
