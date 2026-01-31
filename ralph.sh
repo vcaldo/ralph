@@ -42,6 +42,9 @@ INTERACTION_COUNT=0
 TIMER_PID=""
 TIMER_START_TIME=0
 
+# Signal handling state
+INTERRUPTED=false
+
 # --- Per-iteration state (reset each loop) ---
 # These are set fresh for each iteration
 ITERATION_DURATION=0
@@ -289,6 +292,11 @@ call_claude_api() {
     local claude_stderr
 
     while [ $attempt -le $MAX_RETRIES ]; do
+        # Check if interrupted before attempting
+        if [[ "$INTERRUPTED" == true ]]; then
+            return 1
+        fi
+
         claude_stderr=$(mktemp)
         CLAUDE_EXIT_CODE=0
         claude_json=""
@@ -355,6 +363,9 @@ If, while working on the task, you determine ALL tasks are complete, output exac
             error_type="timeout after ${CLAUDE_TIMEOUT_SECONDS}s"
         fi
 
+        # Stop timer before logging so messages aren't overwritten
+        stop_timer
+
         # Log the failure
         if [[ $attempt -lt $MAX_RETRIES ]]; then
             log_warn "Attempt $attempt/$MAX_RETRIES failed ($error_type), retrying in ${backoff}s..."
@@ -364,7 +375,13 @@ If, while working on the task, you determine ALL tasks are complete, output exac
             fi
             rm -f "$claude_stderr"
             sleep $backoff
+            # Check if interrupted during sleep
+            if [[ "$INTERRUPTED" == true ]]; then
+                return 1
+            fi
             backoff=$((backoff * 2))  # Exponential backoff
+            # Restart timer for next attempt
+            start_timer
         else
             # Final attempt failed
             log_error "All $MAX_RETRIES attempts failed"
@@ -385,14 +402,20 @@ If, while working on the task, you determine ALL tasks are complete, output exac
 # =============================================================================
 
 on_interrupt() {
+    # Set flag to signal graceful shutdown
+    INTERRUPTED=true
+
     # Stop timer if running to clean up display
     stop_timer
 
     echo ""
     echo "=================================================="
-    log_warn "Script interrupted by user (Ctrl+C)"
+    log_warn "Script interrupted (received signal)"
     echo "=================================================="
+}
 
+# Graceful exit function - called when INTERRUPTED flag is set
+graceful_exit() {
     # Print final summary with metrics collected so far
     print_final_summary
 
@@ -403,7 +426,7 @@ on_interrupt() {
         log_info "To continue, run: $0 $PLAN_DIR $ITERATIONS"
     fi
 
-    # Exit with standard signal code for SIGINT
+    # Exit with standard signal code
     exit 130
 }
 
@@ -787,6 +810,11 @@ while true; do
     start_timer
     call_claude_api
     stop_timer
+
+    # Check if interrupted - exit gracefully
+    if [[ "$INTERRUPTED" == true ]]; then
+        graceful_exit
+    fi
 
     # Check for API errors
     if [ $CLAUDE_EXIT_CODE -ne 0 ]; then
