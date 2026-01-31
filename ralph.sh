@@ -25,6 +25,9 @@ readonly MAX_RETRIES=3
 readonly INITIAL_BACKOFF_SECONDS=5
 readonly CLAUDE_TIMEOUT_SECONDS=600  # 10 minute timeout per attempt
 
+# Visual formatting
+readonly SEPARATOR="=================================================="
+
 # --- Configuration (set once via CLI flags or defaults) ---
 # Model configuration
 REQUESTED_MODEL="opus"     # Configurable via --model flag, defaults to opus
@@ -80,6 +83,26 @@ log_warn() {
     echo -e "${YELLOW}⚠${NC}  $1"
 }
 
+print_separator() {
+    echo "$SEPARATOR"
+}
+
+# Log contents of a stderr file if non-empty, then clean up
+# Arguments: $1 = file path, $2 = log level ("warn" or "error")
+log_stderr_file() {
+    local file="$1"
+    local level="${2:-error}"
+    if [[ -s "$file" ]]; then
+        if [[ "$level" == "warn" ]]; then
+            log_warn "Error output:"
+        else
+            log_error "Error output:"
+        fi
+        cat "$file" >&2
+    fi
+    rm -f "$file"
+}
+
 # =============================================================================
 # TIMER/CHRONOGRAPH FUNCTIONS
 # =============================================================================
@@ -131,12 +154,27 @@ stop_timer() {
 # DEPENDENCY CHECKS
 # =============================================================================
 
+# Check if a standard command is available, with cross-platform install instructions
+# Arguments: $1 = command name
+# Returns: 0 if found, 1 if missing (also prints install instructions)
+require_command() {
+    local cmd="$1"
+    if command -v "$cmd" &> /dev/null; then
+        return 0
+    fi
+    log_error "$cmd not found"
+    echo "  Install (Ubuntu/Debian): sudo apt install $cmd"
+    echo "  Install (macOS): brew install $cmd"
+    echo "  Install (Fedora): sudo dnf install $cmd"
+    return 1
+}
+
 # Check that all required dependencies are available
 # Returns 0 if all dependencies are present, 1 otherwise
 check_dependencies() {
     local missing_deps=0
 
-    # Check for claude CLI
+    # Check for claude CLI (special install instructions)
     if ! command -v claude &> /dev/null; then
         log_error "claude CLI not found"
         echo "  Install: npm install -g @anthropic-ai/claude-code"
@@ -144,24 +182,12 @@ check_dependencies() {
         missing_deps=1
     fi
 
-    # Check for jq
-    if ! command -v jq &> /dev/null; then
-        log_error "jq not found"
-        echo "  Install (Ubuntu/Debian): sudo apt install jq"
-        echo "  Install (macOS): brew install jq"
-        echo "  Install (Fedora): sudo dnf install jq"
-        missing_deps=1
-    fi
+    # Check for jq and git
+    require_command jq || missing_deps=1
+    require_command git || missing_deps=1
 
-    # Check for git
-    if ! command -v git &> /dev/null; then
-        log_error "git not found"
-        echo "  Install (Ubuntu/Debian): sudo apt install git"
-        echo "  Install (macOS): brew install git"
-        echo "  Install (Fedora): sudo dnf install git"
-        missing_deps=1
-    else
-        # Git is available, check for identity configuration
+    # If git is available, check for identity configuration
+    if command -v git &> /dev/null; then
         local git_user git_email
         git_user=$(git config user.name 2>/dev/null || echo "")
         git_email=$(git config user.email 2>/dev/null || echo "")
@@ -292,7 +318,7 @@ call_claude_api() {
     local backoff=$INITIAL_BACKOFF_SECONDS
     local claude_stderr
 
-    while [ $attempt -le $MAX_RETRIES ]; do
+    while [[ $attempt -le $MAX_RETRIES ]]; do
         # Check if interrupted before attempting
         if [[ "$INTERRUPTED" == true ]]; then
             return 1
@@ -302,54 +328,36 @@ call_claude_api() {
         CLAUDE_EXIT_CODE=0
         claude_json=""
 
+        # Build the prompt (extracted to avoid duplication between timeout/no-timeout paths)
+        local prompt="Find the highest-priority task from the TODO file and work only on that task.
+
+Here are the current TODO items and progress:
+
+@$TODO_FILE
+
+@$PROGRESS_FILE
+
+Guidelines:
+1. Pick ONE task from the TODO file that you determine has the highest priority
+2. Work ONLY on that task - do not work on multiple tasks
+3. Update the TODO file by marking the task as complete (change [ ] to [x]) or updating its status
+4. After completing the task, append your progress to the progress file (@$PROGRESS_FILE) with this format:
+   - Current date/time
+   - Task name
+   - What was accomplished
+   - Next steps (if any)
+
+IMPORTANT: Only work on a SINGLE task per iteration.
+
+If, while working on the task, you determine ALL tasks are complete, output exactly this:
+<promise>COMPLETE</promise>"
+
         # Run claude with timeout (if available)
         if command -v timeout &> /dev/null; then
-            claude_json=$(timeout "$CLAUDE_TIMEOUT_SECONDS" claude --output-format json --model "$REQUESTED_MODEL" --permission-mode bypassPermissions -p "Find the highest-priority task from the TODO file and work only on that task.
-
-Here are the current TODO items and progress:
-
-@$TODO_FILE
-
-@$PROGRESS_FILE
-
-Guidelines:
-1. Pick ONE task from the TODO file that you determine has the highest priority
-2. Work ONLY on that task - do not work on multiple tasks
-3. Update the TODO file by marking the task as complete (change [ ] to [x]) or updating its status
-4. After completing the task, append your progress to the progress file (@$PROGRESS_FILE) with this format:
-   - Current date/time
-   - Task name
-   - What was accomplished
-   - Next steps (if any)
-
-IMPORTANT: Only work on a SINGLE task per iteration.
-
-If, while working on the task, you determine ALL tasks are complete, output exactly this:
-<promise>COMPLETE</promise>" 2>"$claude_stderr") || CLAUDE_EXIT_CODE=$?
+            claude_json=$(timeout "$CLAUDE_TIMEOUT_SECONDS" claude --output-format json --model "$REQUESTED_MODEL" --permission-mode bypassPermissions -p "$prompt" 2>"$claude_stderr") || CLAUDE_EXIT_CODE=$?
         else
             # Fallback: run without timeout if 'timeout' command unavailable
-            claude_json=$(claude --output-format json --model "$REQUESTED_MODEL" --permission-mode bypassPermissions -p "Find the highest-priority task from the TODO file and work only on that task.
-
-Here are the current TODO items and progress:
-
-@$TODO_FILE
-
-@$PROGRESS_FILE
-
-Guidelines:
-1. Pick ONE task from the TODO file that you determine has the highest priority
-2. Work ONLY on that task - do not work on multiple tasks
-3. Update the TODO file by marking the task as complete (change [ ] to [x]) or updating its status
-4. After completing the task, append your progress to the progress file (@$PROGRESS_FILE) with this format:
-   - Current date/time
-   - Task name
-   - What was accomplished
-   - Next steps (if any)
-
-IMPORTANT: Only work on a SINGLE task per iteration.
-
-If, while working on the task, you determine ALL tasks are complete, output exactly this:
-<promise>COMPLETE</promise>" 2>"$claude_stderr") || CLAUDE_EXIT_CODE=$?
+            claude_json=$(claude --output-format json --model "$REQUESTED_MODEL" --permission-mode bypassPermissions -p "$prompt" 2>"$claude_stderr") || CLAUDE_EXIT_CODE=$?
         fi
 
         # Success - clean up and return
@@ -370,11 +378,7 @@ If, while working on the task, you determine ALL tasks are complete, output exac
         # Log the failure
         if [[ $attempt -lt $MAX_RETRIES ]]; then
             log_warn "Attempt $attempt/$MAX_RETRIES failed ($error_type), retrying in ${backoff}s..."
-            if [[ -s "$claude_stderr" ]]; then
-                log_warn "Error output:"
-                cat "$claude_stderr" >&2
-            fi
-            rm -f "$claude_stderr"
+            log_stderr_file "$claude_stderr" "warn"
             sleep $backoff
             # Check if interrupted during sleep
             if [[ "$INTERRUPTED" == true ]]; then
@@ -387,11 +391,7 @@ If, while working on the task, you determine ALL tasks are complete, output exac
             # Final attempt failed
             log_error "All $MAX_RETRIES attempts failed"
             log_error "Claude CLI failed with exit code $CLAUDE_EXIT_CODE ($error_type)"
-            if [[ -s "$claude_stderr" ]]; then
-                log_error "Error output:"
-                cat "$claude_stderr" >&2
-            fi
-            rm -f "$claude_stderr"
+            log_stderr_file "$claude_stderr" "error"
         fi
 
         attempt=$((attempt + 1))
@@ -402,6 +402,16 @@ If, while working on the task, you determine ALL tasks are complete, output exac
 # SIGNAL HANDLING (Graceful Interrupt)
 # =============================================================================
 
+# Print continuation instructions (used at script end and on interrupt)
+print_continuation_info() {
+    log_info "Progress file: $PROGRESS_FILE"
+    if [[ "$INFINITE_MODE" == true ]]; then
+        log_info "To continue, run: $0 $PLAN_DIR"
+    else
+        log_info "To continue, run: $0 $PLAN_DIR $ITERATIONS"
+    fi
+}
+
 on_interrupt() {
     # Set flag to signal graceful shutdown
     INTERRUPTED=true
@@ -410,22 +420,16 @@ on_interrupt() {
     stop_timer
 
     echo ""
-    echo "=================================================="
+    print_separator
     log_warn "Script interrupted (received signal)"
-    echo "=================================================="
+    print_separator
 }
 
 # Graceful exit function - called when INTERRUPTED flag is set
 graceful_exit() {
     # Print final summary with metrics collected so far
     print_final_summary
-
-    log_info "Progress file: $PROGRESS_FILE"
-    if [ "$INFINITE_MODE" = true ]; then
-        log_info "To continue, run: $0 $PLAN_DIR"
-    else
-        log_info "To continue, run: $0 $PLAN_DIR $ITERATIONS"
-    fi
+    print_continuation_info
 
     # Exit with standard signal code
     exit 130
@@ -566,9 +570,9 @@ print_metrics_summary() {
 
 print_final_summary() {
     echo ""
-    echo "=================================================="
+    print_separator
     echo "                  FINAL SUMMARY"
-    echo "=================================================="
+    print_separator
     echo ""
 
     # Calculate all aggregate metrics in a single jq pass for efficiency
@@ -614,7 +618,7 @@ print_final_summary() {
     local total_duration_str=$(format_duration "$TOTAL_DURATION")
 
     echo "Iterations:"
-    if [ "$INFINITE_MODE" = true ]; then
+    if [[ "$INFINITE_MODE" == true ]]; then
         echo "  Completed:       $INTERACTION_COUNT (unlimited mode)"
     else
         echo "  Completed:       $INTERACTION_COUNT / $ITERATIONS"
@@ -678,7 +682,7 @@ while [[ "${1:-}" == --* ]]; do
     esac
 done
 
-if [ -z "${1:-}" ]; then
+if [[ -z "${1:-}" ]]; then
     log_error "Usage: $0 [options] <plan-dir> [iterations]"
     echo ""
     echo "Options:"
@@ -700,13 +704,13 @@ ITERATIONS=${2:-}
 INFINITE_MODE=false
 
 # Validate plan directory exists
-if [ ! -d "$PLAN_DIR" ]; then
+if [[ ! -d "$PLAN_DIR" ]]; then
     log_error "Plan directory not found: $PLAN_DIR"
     exit 1
 fi
 
 # Validate TODO.md exists in plan directory
-if [ ! -f "$PLAN_DIR/TODO.md" ]; then
+if [[ ! -f "$PLAN_DIR/TODO.md" ]]; then
     log_error "TODO.md not found in plan directory: $PLAN_DIR/TODO.md"
     exit 1
 fi
@@ -717,13 +721,13 @@ PROGRESS_FILE="$PLAN_DIR/progress.txt"
 METRICS_LOG="$PLAN_DIR/ralph_metrics.jsonl"
 
 # Validate and configure iteration mode
-if [ -z "$ITERATIONS" ]; then
+if [[ -z "$ITERATIONS" ]]; then
     # No iterations specified - run in infinite mode
     INFINITE_MODE=true
     ITERATIONS=0  # Set to 0 for consistency in conditionals
 else
     # Iterations specified - validate it's a positive integer
-    if ! [[ "$ITERATIONS" =~ ^[0-9]+$ ]] || [ "$ITERATIONS" -eq 0 ]; then
+    if ! [[ "$ITERATIONS" =~ ^[0-9]+$ ]] || [[ "$ITERATIONS" -eq 0 ]]; then
         log_error "Iterations must be a positive integer (or omit for unlimited), got: $ITERATIONS"
         exit 1
     fi
@@ -731,7 +735,7 @@ fi
 
 log_info "Ralph Automation Script"
 log_info "Plan directory: $PLAN_DIR"
-if [ "$INFINITE_MODE" = true ]; then
+if [[ "$INFINITE_MODE" == true ]]; then
     log_info "Iterations: unlimited (until completion)"
 else
     log_info "Iterations: $ITERATIONS"
@@ -778,22 +782,22 @@ fi
 # MAIN LOOP
 # =============================================================================
 
-ITERATION_COUNT=0
+CURRENT_ITERATION=0
 while true; do
-    ITERATION_COUNT=$((ITERATION_COUNT + 1))
+    CURRENT_ITERATION=$((CURRENT_ITERATION + 1))
 
     # Break if exceeded max iterations (finite mode only)
-    if [ "$INFINITE_MODE" = false ] && [ $ITERATION_COUNT -gt $ITERATIONS ]; then
+    if [[ "$INFINITE_MODE" == false ]] && [[ $CURRENT_ITERATION -gt $ITERATIONS ]]; then
         break
     fi
 
-    echo "=================================================="
-    if [ "$INFINITE_MODE" = true ]; then
-        echo "Iteration $ITERATION_COUNT (unlimited)"
+    print_separator
+    if [[ "$INFINITE_MODE" == true ]]; then
+        echo "Iteration $CURRENT_ITERATION (unlimited)"
     else
-        echo "Iteration $ITERATION_COUNT / $ITERATIONS"
+        echo "Iteration $CURRENT_ITERATION / $ITERATIONS"
     fi
-    echo "=================================================="
+    print_separator
     echo ""
 
     # Capture start time for metrics
@@ -818,7 +822,7 @@ while true; do
     fi
 
     # Check for API errors
-    if [ $CLAUDE_EXIT_CODE -ne 0 ]; then
+    if [[ $CLAUDE_EXIT_CODE -ne 0 ]]; then
         log_error "API call failed with exit code $CLAUDE_EXIT_CODE"
         exit 1
     fi
@@ -832,11 +836,11 @@ while true; do
     # Extract task name from progress file (Claude writes "Task:" line)
     COMMIT_MSG=$(extract_task_from_progress "$PROGRESS_FILE")
     if [[ -z "$COMMIT_MSG" ]]; then
-        COMMIT_MSG="Ralph: iteration $ITERATION_COUNT"
+        COMMIT_MSG="Ralph: iteration $CURRENT_ITERATION"
     fi
 
     # Auto-commit changes if files were modified
-    if [ "$ITERATION_FILES_CHANGED" -gt 0 ]; then
+    if [[ "$ITERATION_FILES_CHANGED" -gt 0 ]]; then
         commit_changes "$COMMIT_MSG"
     fi
 
@@ -851,16 +855,16 @@ while true; do
 
     # Check for completion signal
     if [[ "$result" == *"<promise>COMPLETE</promise>"* ]]; then
-        echo "=================================================="
+        print_separator
         log_success "All tasks complete, exiting"
-        echo "=================================================="
+        print_separator
 
         # Print final summary
         print_final_summary
 
         # Send notification if tt is available
         if command -v tt &> /dev/null; then
-            tt notify "Ralph: All tasks complete after $ITERATION_COUNT iterations"
+            tt notify "Ralph: All tasks complete after $CURRENT_ITERATION iterations"
         fi
 
         exit 0
@@ -870,18 +874,13 @@ while true; do
 done
 
 # If we get here, we ran out of iterations
-echo "=================================================="
+print_separator
 log_warn "Reached maximum iterations ($ITERATIONS)"
 log_info "Tasks may remain incomplete - check $TODO_FILE"
-echo "=================================================="
+print_separator
 echo ""
 
 # Print final summary
 print_final_summary
 
-log_info "Progress file: $PROGRESS_FILE"
-if [ "$INFINITE_MODE" = true ]; then
-    log_info "To continue, run: $0 $PLAN_DIR"
-else
-    log_info "To continue, run: $0 $PLAN_DIR $ITERATIONS"
-fi
+print_continuation_info

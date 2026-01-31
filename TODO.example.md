@@ -34,7 +34,7 @@ Ralph will:
 6. Continue until all tasks complete (unless iteration limit specified)
 
 **IMPORTANT SAFETY RULES:**
-- ❌ **DO NOT** deploy to production
+- ❌ **DO NOT** deploy touch production
 - ❌ **DO NOT** run production-related make targets
 - ✅ **OK** to deploy to local dev environment
 - ✅ **OK** to change data in dev environment
