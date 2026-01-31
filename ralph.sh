@@ -577,6 +577,46 @@ extract_iteration_metrics() {
     INTERACTION_COUNT=$((INTERACTION_COUNT + 1))
 }
 
+extract_iteration_metrics_opencode() {
+    local jsonl="$1"
+    local start_time="$2"
+
+    ITERATION_DURATION=$((SECONDS - start_time))
+
+    # Parse JSONL and aggregate step_finish tokens
+    local token_data
+    token_data=$(echo "$jsonl" | jq -s '[.[] | select(.type == "step_finish") | .part.tokens // {}] | {
+        input: (map(.input // 0) | add // 0),
+        output: (map(.output // 0) | add // 0),
+        cache_read: (map(.cache.read // 0) | add // 0),
+        cache_write: (map(.cache.write // 0) | add // 0)
+    }' 2>/dev/null || echo '{"input":0,"output":0,"cache_read":0,"cache_write":0}')
+
+    ITERATION_MODEL=$(get_opencode_model "$REQUESTED_MODEL")
+    ITERATION_MODELS="[\"$ITERATION_MODEL\"]"
+    ITERATION_STOP_REASON="end_turn"
+    ITERATION_INPUT_TOKENS=$(echo "$token_data" | jq -r '.input')
+    ITERATION_OUTPUT_TOKENS=$(echo "$token_data" | jq -r '.output')
+    ITERATION_CACHE_CREATE_TOKENS=$(echo "$token_data" | jq -r '.cache_write')
+    ITERATION_CACHE_READ_TOKENS=$(echo "$token_data" | jq -r '.cache_read')
+    ITERATION_TOTAL_TOKENS=$((ITERATION_INPUT_TOKENS + ITERATION_OUTPUT_TOKENS))
+
+    ITERATION_FILES_CHANGED=$(git status --porcelain 2>/dev/null | wc -l)
+
+    ITERATION_SUCCESS="true"
+    if [[ $CLAUDE_EXIT_CODE -ne 0 ]]; then
+        ITERATION_SUCCESS="false"
+    fi
+
+    append_metrics_log
+
+    TOTAL_DURATION=$((TOTAL_DURATION + ITERATION_DURATION))
+    TOTAL_INPUT_TOKENS=$((TOTAL_INPUT_TOKENS + ITERATION_INPUT_TOKENS))
+    TOTAL_OUTPUT_TOKENS=$((TOTAL_OUTPUT_TOKENS + ITERATION_OUTPUT_TOKENS))
+    TOTAL_FILES_CHANGED=$((TOTAL_FILES_CHANGED + ITERATION_FILES_CHANGED))
+    INTERACTION_COUNT=$((INTERACTION_COUNT + 1))
+}
+
 append_metrics_log() {
     # Get ISO 8601 timestamp
     local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
