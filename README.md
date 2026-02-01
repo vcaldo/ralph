@@ -21,7 +21,7 @@ cp TODO.example.md plans/my-feature/TODO.md
 
 # Using OpenCode instead of Claude CLI
 go install github.com/opencode-ai/opencode@latest
-./ralph.sh --cli opencode plans/my-feature/
+./ralph.sh --cli opencode --provider anthropic plans/my-feature/
 ```
 ---
 
@@ -144,14 +144,20 @@ export RALPH_CLI=opencode
 
 ### Provider Selection
 
-OpenCode supports multiple providers. Use `--provider` to select one:
+OpenCode supports multiple providers. Use `--provider` to select one (required when using `--cli opencode`):
 
 ```bash
-# Use Anthropic API directly (default)
+# Use Anthropic API directly
 ./ralph.sh --cli opencode --provider anthropic plans/my-feature/
 
 # Use GitHub Copilot as the provider
 ./ralph.sh --cli opencode --provider github-copilot plans/my-feature/
+
+# Use OpenRouter (defaults to free GLM-4.7 model if --model not specified)
+./ralph.sh --cli opencode --provider openrouter plans/my-feature/
+
+# Use local Ollama instance
+./ralph.sh --cli opencode --provider ollama --model llama3 plans/my-feature/
 ```
 
 ### Model Selection

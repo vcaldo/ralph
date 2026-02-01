@@ -12,10 +12,20 @@ ralph.sh [OPTIONS] <plan-dir> [iterations]
 
 ### Options
 
-- `--model <haiku|sonnet|opus>` - Specify which Claude model to use (default: opus)
-  - `haiku` - Fast, cost-effective model for simple tasks
-  - `sonnet` - Balanced model for general-purpose work
-  - `opus` - Most capable model for complex tasks
+- `--model <model>` - Specify which model to use (default: opus)
+  - Claude CLI: `haiku`, `sonnet`, `opus`
+  - OpenCode: any model name (e.g., `grok-code-fast-1`, `gpt-5.2-codex`)
+  - Model names are translated for providers (e.g., `opus` → `claude-opus-4-5`)
+
+- `--cli <claude|opencode>` - Specify which CLI to use (default: claude)
+  - Can also be set via `RALPH_CLI` environment variable
+  - Command-line flag takes precedence over environment variable
+
+- `--provider <provider>` - Specify the provider for OpenCode (required when using `--cli opencode`)
+  - `anthropic` - Anthropic API directly
+  - `github-copilot` - GitHub Copilot
+  - `openrouter` - OpenRouter (defaults to GLM-4.7 free model if `--model` not specified)
+  - `ollama` - Local Ollama instance
 
 ### Arguments
 
@@ -32,7 +42,7 @@ ralph.sh [OPTIONS] <plan-dir> [iterations]
 ### Examples
 
 ```bash
-# Run until complete with default model (opus)
+# Run until complete with default model (opus) using Claude CLI
 ./ralph.sh plans/arena-v2/
 
 # Run max 10 iterations with opus
@@ -43,6 +53,18 @@ ralph.sh [OPTIONS] <plan-dir> [iterations]
 
 # Run 20 iterations with haiku
 ./ralph.sh --model haiku plans/refactor/ 20
+
+# Use OpenCode with Anthropic provider
+./ralph.sh --cli opencode --provider anthropic plans/arena-v2/
+
+# Use OpenCode with GitHub Copilot
+./ralph.sh --cli opencode --provider github-copilot --model sonnet plans/arena-v2/
+
+# Use OpenCode with OpenRouter (defaults to free GLM-4.7 model)
+./ralph.sh --cli opencode --provider openrouter plans/arena-v2/
+
+# Use environment variable for CLI selection
+RALPH_CLI=opencode ./ralph.sh --provider anthropic plans/arena-v2/
 ```
 
 ## Metrics & Monitoring
@@ -79,13 +101,19 @@ Ralph tracks comprehensive metrics for each iteration and provides summary stati
 
 ### Output Files
 
-All output files are created in the `<plan-dir>/` directory:
+All output files are created in the `<plan-dir>/` directory with timestamped names that include the model:
 
-| File | Format | Purpose |
+| File Pattern | Format | Purpose |
 |------|--------|---------|
 | `TODO.md` | Markdown | Input task list (required to exist before running) |
-| `progress.txt` | Text | Progress log appended by Claude after each iteration |
-| `ralph_metrics.jsonl` | JSONL | Detailed per-iteration metrics (one JSON object per line) |
+| `YYYY-MM-DD_HH-MM-SS_model_TODO.md` | Markdown | Snapshot of TODO.md at run start (for resuming) |
+| `YYYY-MM-DD_HH-MM-SS_model_progress.txt` | Text | Progress log appended by Claude after each iteration |
+| `YYYY-MM-DD_HH-MM-SS_model_ralph_metrics.jsonl` | JSONL | Detailed per-iteration metrics (one JSON object per line) |
+
+Example filenames for an opus run started on Jan 16, 2026 at 12:34:56:
+- `2026-01-16_12-34-56_opus_TODO.md`
+- `2026-01-16_12-34-56_opus_progress.txt`
+- `2026-01-16_12-34-56_opus_ralph_metrics.jsonl`
 
 ### JSONL Format
 
@@ -99,6 +127,7 @@ The `ralph_metrics.jsonl` file contains one JSON object per line (JSONL format).
   "timestamp": "2026-01-16T12:34:56Z",
   "duration_seconds": 45,
   "model": "claude-opus-4-5-20251101",
+  "models": ["claude-opus-4-5-20251101"],
   "stop_reason": "end_turn",
   "usage": {
     "input_tokens": 12500,
@@ -118,7 +147,8 @@ The `ralph_metrics.jsonl` file contains one JSON object per line (JSONL format).
 - `iteration` - Iteration number (1-based)
 - `timestamp` - ISO 8601 UTC timestamp
 - `duration_seconds` - Execution time for this iteration
-- `model` - Full model identifier used
+- `model` - Primary model identifier used (highest token usage)
+- `models` - Array of all model identifiers used in the iteration
 - `stop_reason` - Reason Claude stopped (e.g., "end_turn", "max_tokens")
 - `usage.input_tokens` - Input tokens consumed
 - `usage.output_tokens` - Output tokens generated
@@ -220,6 +250,16 @@ jq -r '[.iteration, (.usage.cache_read_tokens / .usage.input_tokens * 100 | roun
 ## Git Integration
 
 Ralph requires a git repository and performs several git-related operations.
+
+### Automatic Branch Creation
+
+Before starting iterations, Ralph automatically creates and checks out a plan-specific branch:
+
+- **Branch naming:** `ralph/<plan-name>` (e.g., `ralph/arena-v2` for `plans/arena-v2/`)
+- If the branch already exists, Ralph checks it out
+- If the branch doesn't exist, Ralph creates it from the current HEAD
+
+This keeps plan work isolated and makes it easy to review changes or create PRs.
 
 ### Pre-flight Checks
 
@@ -368,11 +408,24 @@ watch -n 2 tail -20 plans/my-plan/progress.txt
 Ralph is designed to be resumable. If interrupted:
 
 1. Ralph shows the exact command to resume
-2. Claude reads the existing `progress.txt` to understand what's been done
-3. Claude consults `TODO.md` to see remaining tasks
-4. Execution continues from where it left off
+2. On restart, Ralph detects existing run files and resumes automatically
+3. Claude reads the existing progress file to understand what's been done
+4. Claude consults the TODO snapshot to see remaining tasks
+5. Metrics are loaded from the existing log to continue totals
 
-**Important:** The same `plan-dir` preserves all state.
+**How resume detection works:**
+
+Ralph looks for matching timestamped files with the same model:
+- `YYYY-MM-DD_HH-MM-SS_model_TODO.md` (snapshot)
+- `YYYY-MM-DD_HH-MM-SS_model_progress.txt`
+- `YYYY-MM-DD_HH-MM-SS_model_ralph_metrics.jsonl`
+
+If all three files exist with the same timestamp and model, Ralph resumes that run instead of starting fresh. This means:
+- Running with a different `--model` starts a new run
+- Each model gets its own set of run files
+- You can have parallel runs with different models in the same plan directory
+
+**Important:** The same `plan-dir` preserves all state per model.
 
 ### Completion Signal
 
