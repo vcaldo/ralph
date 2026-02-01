@@ -904,16 +904,16 @@ while [[ "${1:-}" == --* ]]; do
             ;;
         --provider)
             if [[ -z "${2:-}" ]] || [[ "${2:-}" == --* ]]; then
-                log_error "--provider requires an argument (anthropic|github-copilot|openrouter)"
+                log_error "--provider requires an argument (anthropic|github-copilot|openrouter|ollama)"
                 exit 1
             fi
             case "$2" in
-                anthropic|github-copilot|openrouter)
+                anthropic|github-copilot|openrouter|ollama)
                     OPENCODE_PROVIDER="$2"
                     shift 2
                     ;;
                 *)
-                    log_error "Invalid provider: $2 (must be anthropic, github-copilot, or openrouter)"
+                    log_error "Invalid provider: $2 (must be anthropic, github-copilot, openrouter, or ollama)"
                     exit 1
                     ;;
             esac
@@ -927,7 +927,7 @@ done
 
 # Validate that --provider is specified when using opencode
 if [[ "$SELECTED_CLI" == "opencode" && -z "$OPENCODE_PROVIDER" ]]; then
-    log_error "When using --cli opencode, you must specify --provider (anthropic|github-copilot|openrouter)"
+    log_error "When using --cli opencode, you must specify --provider (anthropic|github-copilot|openrouter|ollama)"
     exit 1
 fi
 
@@ -949,7 +949,7 @@ if [[ -z "${1:-}" ]]; then
     echo "  --model MODEL          Model to use. Claude CLI: haiku, sonnet, opus (default: opus)"
     echo "                         OpenCode: any model name (e.g., grok-code-fast-1, gpt-5.2-codex)"
     echo "  --cli CLI              CLI to use: claude or opencode (default: claude, env: RALPH_CLI)"
-    echo "  --provider PROV        OpenCode provider: anthropic, github-copilot, or openrouter (required for opencode)"
+    echo "  --provider PROV        OpenCode provider: anthropic, github-copilot, openrouter, or ollama (required for opencode)"
     echo ""
     echo "Arguments:"
     echo "  plan-dir               Directory containing the plan (must have TODO.md)"
