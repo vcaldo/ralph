@@ -330,13 +330,11 @@ check_git_state() {
 }
 
 # Create and checkout a plan-specific branch
-# Parameters: model - The model name (e.g., sonnet, opus)
-#            plan_name - The plan directory name
+# Parameters: plan_name - The plan directory name
 # Returns: 0 if successful, 1 if failed
 create_plan_branch() {
-    local model="$1"
-    local plan_name="$2"
-    local branch_name="ralph/${model}-${plan_name}"
+    local plan_name="$1"
+    local branch_name="ralph/${plan_name}"
 
     # Check if branch already exists
     if git show-ref --verify --quiet "refs/heads/$branch_name"; then
@@ -1059,7 +1057,7 @@ if ! check_git_state; then
 fi
 
 # Create and checkout plan branch
-if ! create_plan_branch "$REQUESTED_MODEL" "$PLAN_NAME"; then
+if ! create_plan_branch "$PLAN_NAME"; then
     exit 1
 fi
 
