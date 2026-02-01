@@ -982,9 +982,31 @@ if [[ ! -f "$PLAN_DIR/TODO.md" ]]; then
 fi
 
 # Set file paths
-# Create timestamp first (used for all run-specific files)
-METRICS_TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 TODO_FILE="$PLAN_DIR/TODO.md"
+
+# Check for existing run files that match the model
+# If all three files (TODO snapshot, progress, metrics) exist with the same timestamp, resume that run
+EXISTING_TIMESTAMP=""
+for snapshot in "$PLAN_DIR"/*_${REQUESTED_MODEL}_TODO.md; do
+    [[ -f "$snapshot" ]] || continue
+    # Extract timestamp from filename (format: YYYY-MM-DD_HH-MM-SS_model_TODO.md)
+    ts=$(basename "$snapshot" | sed "s/_${REQUESTED_MODEL}_TODO\.md$//")
+    # Check if matching progress and metrics files exist
+    if [[ -f "$PLAN_DIR/${ts}_${REQUESTED_MODEL}_progress.txt" ]] && \
+       [[ -f "$PLAN_DIR/${ts}_${REQUESTED_MODEL}_ralph_metrics.jsonl" ]]; then
+        EXISTING_TIMESTAMP="$ts"
+        # Use the most recent matching set (files are sorted by name, which equals chronological order)
+    fi
+done
+
+if [[ -n "$EXISTING_TIMESTAMP" ]]; then
+    METRICS_TIMESTAMP="$EXISTING_TIMESTAMP"
+    log_info "Resuming existing run from $METRICS_TIMESTAMP"
+else
+    # Create new timestamp for this run
+    METRICS_TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+fi
+
 TODO_SNAPSHOT="$PLAN_DIR/${METRICS_TIMESTAMP}_${REQUESTED_MODEL}_TODO.md"
 PROGRESS_FILE="$PLAN_DIR/${METRICS_TIMESTAMP}_${REQUESTED_MODEL}_progress.txt"
 METRICS_LOG="$PLAN_DIR/${METRICS_TIMESTAMP}_${REQUESTED_MODEL}_ralph_metrics.jsonl"
@@ -1050,17 +1072,41 @@ echo ""
 # Verify we can write to required files
 check_file_writable "$PROGRESS_FILE" "progress file"
 check_file_writable "$METRICS_LOG" "metrics file"
-check_file_writable "$TODO_SNAPSHOT" "TODO snapshot file"
 
-# Create TODO snapshot for this run
-cp "$TODO_FILE" "$TODO_SNAPSHOT"
-log_success "Created TODO snapshot: $(basename "$TODO_SNAPSHOT")"
+# Create TODO snapshot for this run (only if not resuming)
+if [[ -n "$EXISTING_TIMESTAMP" ]]; then
+    log_success "Using existing TODO snapshot: $(basename "$TODO_SNAPSHOT")"
+
+    # Load existing metrics to continue totals
+    if [[ -s "$METRICS_LOG" ]]; then
+        existing_metrics=$(jq -s '{
+            count: length,
+            duration: (map(.duration_seconds) | add // 0),
+            input: (map(.usage.input_tokens) | add // 0),
+            output: (map(.usage.output_tokens) | add // 0),
+            files: (map(.files_changed) | add // 0)
+        }' "$METRICS_LOG" 2>/dev/null || echo '{"count":0,"duration":0,"input":0,"output":0,"files":0}')
+
+        INTERACTION_COUNT=$(echo "$existing_metrics" | jq -r '.count')
+        TOTAL_DURATION=$(echo "$existing_metrics" | jq -r '.duration')
+        TOTAL_INPUT_TOKENS=$(echo "$existing_metrics" | jq -r '.input')
+        TOTAL_OUTPUT_TOKENS=$(echo "$existing_metrics" | jq -r '.output')
+        TOTAL_FILES_CHANGED=$(echo "$existing_metrics" | jq -r '.files')
+
+        log_info "Loaded $INTERACTION_COUNT previous iterations from metrics"
+    fi
+else
+    check_file_writable "$TODO_SNAPSHOT" "TODO snapshot file"
+    cp "$TODO_FILE" "$TODO_SNAPSHOT"
+    log_success "Created TODO snapshot: $(basename "$TODO_SNAPSHOT")"
+fi
 
 # =============================================================================
 # MAIN LOOP
 # =============================================================================
 
-CURRENT_ITERATION=0
+# Start iteration counter from where we left off (if resuming)
+CURRENT_ITERATION=$INTERACTION_COUNT
 while true; do
     CURRENT_ITERATION=$((CURRENT_ITERATION + 1))
 
